@@ -5,6 +5,10 @@ import { useMemo, useState } from "react";
 import {
   ArrowRight,
   BadgeCheck,
+  CheckCircle2,
+  CircleSlash,
+  ClipboardCheck,
+  Download,
   FileUp,
   FileText,
   Lightbulb,
@@ -43,6 +47,11 @@ type Insight = {
   participants: string[];
   confidence: string;
   status: string;
+};
+
+type ReviewStatus = "승인" | "수정 필요" | "제외";
+type ReviewedInsight = Insight & {
+  reviewStatus: ReviewStatus;
 };
 
 type AnalysisResponse = {
@@ -97,6 +106,7 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [recognition, setRecognition] = useState<RecognitionResponse | null>(null);
   const [result, setResult] = useState<AnalysisResponse | null>(null);
+  const [reviewedInsights, setReviewedInsights] = useState<ReviewedInsight[]>([]);
   const [loading, setLoading] = useState(false);
   const [recognizing, setRecognizing] = useState(false);
   const [error, setError] = useState("");
@@ -111,6 +121,7 @@ export default function Home() {
     setRecognizing(true);
     setError("");
     setResult(null);
+    setReviewedInsights([]);
     setRecognition(null);
     try {
       const response = inputMode === "file" && selectedFile ? await recognizeFile(selectedFile) : await recognizeText();
@@ -130,13 +141,20 @@ export default function Home() {
     setLoading(true);
     setError("");
     setResult(null);
+    setReviewedInsights([]);
     try {
-      const response = file ? await analyzeFile(file) : await analyzeText();
+      const response = inputMode === "file" && file ? await analyzeFile(file) : await analyzeText();
       const data = await response.json();
       if (!response.ok) {
         throw new Error(formatErrorMessage(data.detail ?? "분석 요청에 실패했습니다."));
       }
       setResult(data);
+      setReviewedInsights(
+        data.analysis.insights.map((insight: Insight) => ({
+          ...insight,
+          reviewStatus: "수정 필요"
+        }))
+      );
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "분석 중 오류가 발생했습니다.");
     } finally {
@@ -190,15 +208,38 @@ export default function Home() {
     setFile(selectedFile);
     setRecognition(null);
     setResult(null);
+    setReviewedInsights([]);
     if (selectedFile) {
       setSourceName(selectedFile.name);
       recognize(selectedFile);
     }
   }
 
+  function changeInputMode(nextMode: "file" | "text") {
+    setInputMode(nextMode);
+    setRecognition(null);
+    setResult(null);
+    setReviewedInsights([]);
+    setError("");
+  }
+
+  function updateInsight(insightId: string, updates: Partial<ReviewedInsight>) {
+    setReviewedInsights((current) =>
+      current.map((insight) => (insight.id === insightId ? { ...insight, ...updates } : insight))
+    );
+  }
+
   const topInsight = result?.analysis.insights[0];
   const canRecognize = inputMode === "file" ? Boolean(file) : Boolean(text.trim());
-  const canAnalyze = Boolean(recognition && (file || text.trim()));
+  const canAnalyze = Boolean(recognition && (inputMode === "file" ? file : text.trim()));
+  const approvedInsights = useMemo(
+    () => reviewedInsights.filter((insight) => insight.reviewStatus === "승인"),
+    [reviewedInsights]
+  );
+  const reportMarkdown = useMemo(
+    () => buildReportMarkdown(projectName, recognition, result, approvedInsights, segmentById),
+    [projectName, recognition, result, approvedInsights, segmentById]
+  );
 
   return (
     <main className="app-shell">
@@ -239,10 +280,10 @@ export default function Home() {
           </div>
 
           <div className="mode-tabs" role="tablist">
-            <button className={inputMode === "file" ? "active" : ""} onClick={() => setInputMode("file")} type="button">
+            <button className={inputMode === "file" ? "active" : ""} onClick={() => changeInputMode("file")} type="button">
               파일 업로드
             </button>
-            <button className={inputMode === "text" ? "active" : ""} onClick={() => setInputMode("text")} type="button">
+            <button className={inputMode === "text" ? "active" : ""} onClick={() => changeInputMode("text")} type="button">
               텍스트 직접 입력
             </button>
           </div>
@@ -344,7 +385,7 @@ export default function Home() {
           <section className="results">
             {topInsight ? (
               <div className="conclusion">
-                <span>한 줄 결론</span>
+                <span>핵심 결론</span>
                 <h3>{topInsight.title}</h3>
                 <p>{topInsight.summary}</p>
               </div>
@@ -352,45 +393,101 @@ export default function Home() {
 
             <div className="result-grid">
               <section className="left-stack">
-                <SectionTitle icon={<Lightbulb size={18} />} title="핵심 인사이트" />
-                <div className="insight-grid">
-                  {result.analysis.insights.map((insight, index) => (
-                    <article className="insight-card" key={insight.id}>
-                      <span>{index === 0 ? "핵심" : insight.confidence}</span>
-                      <h4>{insight.title}</h4>
-                      <p>{insight.interpretation || insight.summary}</p>
-                      <strong>권장 조치</strong>
-                      <p>{insight.recommendation}</p>
-                    </article>
-                  ))}
+                <SectionTitle icon={<Lightbulb size={18} />} title="분석 요약" />
+                <div className="summary-strip">
+                  <Metric label="정리된 원문" value={`${result.segment_count}개`} />
+                  <Metric label="인사이트 후보" value={`${reviewedInsights.length}개`} />
+                  <Metric label="승인된 인사이트" value={`${approvedInsights.length}개`} />
+                  <Metric label="반복 주제" value={`${result.analysis.topics.length}개`} />
                 </div>
 
-                <SectionTitle icon={<MessageSquareText size={18} />} title="근거 발화" />
-                <div className="quote-list">
-                  {result.analysis.insights.flatMap((insight) =>
-                    insight.evidence_segment_ids.slice(0, 2).map((segmentId) => {
-                      const segment = segmentById.get(segmentId);
-                      if (!segment) return null;
-                      return (
-                        <article className="quote-card" key={`${insight.id}-${segmentId}`}>
-                          <div>
-                            <b>{segment.participant}</b>
-                            <span>{segment.question_or_topic}</span>
-                          </div>
-                          <p>{segment.content}</p>
-                          <small>AI 해석: {insight.why_it_matters || insight.product_implication || insight.recommendation}</small>
-                        </article>
-                      );
-                    })
-                  )}
+                <SectionTitle icon={<ClipboardCheck size={18} />} title="인사이트 검수" />
+                <div className="review-list">
+                  {reviewedInsights.map((insight, index) => (
+                    <article className={`review-card status-${statusClassName(insight.reviewStatus)}`} key={insight.id}>
+                      <div className="review-card-header">
+                        <span>{index + 1}</span>
+                        <div className="status-buttons" aria-label="인사이트 상태">
+                          <button
+                            className={insight.reviewStatus === "승인" ? "active approve" : ""}
+                            onClick={() => updateInsight(insight.id, { reviewStatus: "승인" })}
+                            type="button"
+                          >
+                            <CheckCircle2 size={16} />
+                            승인
+                          </button>
+                          <button
+                            className={insight.reviewStatus === "수정 필요" ? "active revise" : ""}
+                            onClick={() => updateInsight(insight.id, { reviewStatus: "수정 필요" })}
+                            type="button"
+                          >
+                            수정 필요
+                          </button>
+                          <button
+                            className={insight.reviewStatus === "제외" ? "active exclude" : ""}
+                            onClick={() => updateInsight(insight.id, { reviewStatus: "제외" })}
+                            type="button"
+                          >
+                            <CircleSlash size={16} />
+                            제외
+                          </button>
+                        </div>
+                      </div>
+
+                      <label>
+                        인사이트 제목
+                        <input
+                          value={insight.title}
+                          onChange={(event) => updateInsight(insight.id, { title: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        해석
+                        <textarea
+                          className="compact-textarea"
+                          value={insight.interpretation || insight.summary}
+                          onChange={(event) => updateInsight(insight.id, { interpretation: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        왜 중요한가
+                        <textarea
+                          className="compact-textarea"
+                          value={insight.why_it_matters || ""}
+                          onChange={(event) => updateInsight(insight.id, { why_it_matters: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        권장 조치
+                        <textarea
+                          className="compact-textarea"
+                          value={insight.recommendation}
+                          onChange={(event) => updateInsight(insight.id, { recommendation: event.target.value })}
+                        />
+                      </label>
+
+                      <div className="evidence-block">
+                        <b>근거 발화</b>
+                        {insight.evidence_segment_ids.slice(0, 3).map((segmentId) => {
+                          const segment = segmentById.get(segmentId);
+                          if (!segment) return null;
+                          return (
+                            <p key={segmentId}>
+                              <strong>{segment.participant}</strong> · {segment.question_or_topic}: {segment.content}
+                            </p>
+                          );
+                        })}
+                      </div>
+                    </article>
+                  ))}
                 </div>
               </section>
 
               <aside className="right-stack">
                 <InfoCard title="분석 개요">
-                  <Metric label="정리된 원문" value={`${result.segment_count}개`} />
-                  <Metric label="인사이트" value={`${result.analysis.insights.length}개`} />
-                  <Metric label="반복 주제" value={`${result.analysis.topics.length}개`} />
+                  <Metric label="자료명" value={result.source_name} />
+                  <Metric label="검수 대기" value={`${reviewedInsights.filter((insight) => insight.reviewStatus === "수정 필요").length}개`} />
+                  <Metric label="제외" value={`${reviewedInsights.filter((insight) => insight.reviewStatus === "제외").length}개`} />
                 </InfoCard>
                 <InfoCard title="주요 키워드">
                   <div className="keyword-list">
@@ -400,10 +497,27 @@ export default function Home() {
                   </div>
                 </InfoCard>
                 <InfoCard title="다음 단계">
-                  <p className="muted">인사이트 검수 화면에서 제목과 권장 조치를 다듬고, 보고서 초안으로 넘기는 흐름을 이어서 만들면 됩니다.</p>
+                  <p className="muted">보고서에는 승인된 인사이트만 포함됩니다. 제목과 권장 조치를 다듬은 뒤 승인 상태로 바꿔주세요.</p>
                 </InfoCard>
               </aside>
             </div>
+
+            <section className="report-section">
+              <div className="report-header">
+                <SectionTitle icon={<FileText size={18} />} title="보고서 초안" />
+                <button className="secondary-button compact" disabled={!approvedInsights.length} onClick={() => downloadMarkdown(reportMarkdown)} type="button">
+                  <Download size={18} />
+                  Markdown 다운로드
+                </button>
+              </div>
+              {approvedInsights.length ? (
+                <pre className="report-preview">{reportMarkdown}</pre>
+              ) : (
+                <div className="empty-report">
+                  <p>승인된 인사이트가 아직 없습니다. 검수 카드에서 보고서에 넣을 인사이트를 승인하면 초안이 생성됩니다.</p>
+                </div>
+              )}
+            </section>
 
             <section className="affinity-section">
               <SectionTitle icon={<Network size={18} />} title="어피니티 다이어그램" />
@@ -476,4 +590,102 @@ function formatErrorMessage(message: string) {
     return "현재 요청이 무료 모델의 분당 토큰 한도를 넘었습니다. 자료는 나눠 처리하고 있지만 잠시 후 다시 시도해야 합니다.";
   }
   return message;
+}
+
+function statusClassName(status: ReviewStatus) {
+  if (status === "승인") return "approved";
+  if (status === "제외") return "excluded";
+  return "needs-review";
+}
+
+function buildReportMarkdown(
+  projectName: string,
+  recognition: RecognitionResponse | null,
+  result: AnalysisResponse | null,
+  approvedInsights: ReviewedInsight[],
+  segmentById: Map<string, Segment>
+) {
+  if (!result || !approvedInsights.length) {
+    return "";
+  }
+
+  const topicSummary = result.analysis.topics
+    .slice(0, 5)
+    .map((topic) => `- ${topic.topic_name}: ${topic.summary}`)
+    .join("\n");
+  const keywordSummary = result.analysis.keywords
+    .slice(0, 12)
+    .map((keyword) => keyword.keyword)
+    .join(", ");
+
+  const findingSections = approvedInsights
+    .map((insight, index) => {
+      const evidence = insight.evidence_segment_ids
+        .slice(0, 3)
+        .map((segmentId) => segmentById.get(segmentId))
+        .filter(Boolean)
+        .map((segment) => `  - ${segment?.participant} · ${segment?.question_or_topic}: ${segment?.content}`)
+        .join("\n");
+
+      return `### ${index + 1}. ${insight.title}
+
+${insight.interpretation || insight.summary}
+
+**왜 중요한가**  
+${insight.why_it_matters || "추가 검토가 필요합니다."}
+
+**개선 제안**  
+${insight.recommendation}
+
+**근거 발화**
+${evidence || "  - 연결된 근거 발화가 없습니다."}`;
+    })
+    .join("\n\n");
+
+  const appendixEvidence = approvedInsights
+    .flatMap((insight) => insight.evidence_segment_ids)
+    .filter((segmentId, index, segmentIds) => segmentIds.indexOf(segmentId) === index)
+    .map((segmentId) => segmentById.get(segmentId))
+    .filter(Boolean)
+    .map((segment) => `- ${segment?.participant} · ${segment?.question_or_topic}: ${segment?.content}`)
+    .join("\n");
+
+  return `# ${projectName} UX 리서치 보고서 초안
+
+## Executive Summary
+이번 분석에서는 ${approvedInsights.length}개의 핵심 인사이트를 승인했습니다. 주요 키워드는 ${keywordSummary || "추가 분석 필요"}입니다.
+
+## 조사 배경
+- 프로젝트명: ${projectName}
+- 자료명: ${result.source_name}
+- 자료 유형: ${recognition?.source_type || "미확인"}
+
+## 방법
+- 원자료 발화 단위: ${recognition?.segment_count ?? result.segment_count}개
+- 분석 대상 참가자 발화: ${recognition?.participant_utterance_count ?? "미확인"}개
+- 인식된 참가자: ${recognition?.participants.length ? recognition.participants.join(", ") : "미확인"}
+
+## 핵심 발견
+${findingSections}
+
+## 사용성 이슈
+${topicSummary || "- 반복 주제가 충분히 식별되지 않았습니다."}
+
+## 개선 제안
+${approvedInsights.map((insight, index) => `${index + 1}. ${insight.recommendation}`).join("\n")}
+
+## Appendix
+${appendixEvidence || "- 승인된 인사이트에 연결된 근거 발화가 없습니다."}
+`;
+}
+
+function downloadMarkdown(markdown: string) {
+  if (!markdown) return;
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "ux-research-report-draft.md";
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
