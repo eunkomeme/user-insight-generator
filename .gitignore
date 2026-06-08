@@ -6,3 +6,7 @@ venv/
 .env
 projects/
 .streamlit/secrets.toml
+node_modules/
+.next/
+frontend/node_modules/
+frontend/.next/

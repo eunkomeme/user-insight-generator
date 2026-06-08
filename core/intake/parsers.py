@@ -54,7 +54,7 @@ def _parse_text_segments(filename: str, suffix: str, text: str) -> list[Segment]
                 source_file=filename,
                 source_type="마크다운" if suffix in {".md", ".markdown"} else "텍스트",
                 source_location=f"{start_line}-{end_line}",
-                include_in_analysis=True,
+                include_in_analysis=participant != "진행자",
                 created_at=utc_now(),
             )
         )
@@ -125,12 +125,12 @@ def _parse_text_segments(filename: str, suffix: str, text: str) -> list[Segment]
             participant=UNKNOWN_PARTICIPANT,
             question_or_topic=UNKNOWN_TOPIC,
             content=paragraph,
-            source_file=filename,
-            source_type="마크다운" if suffix in {".md", ".markdown"} else "텍스트",
-            source_location=f"paragraph {index}",
-            include_in_analysis=True,
-            created_at=utc_now(),
-        )
+                source_file=filename,
+                source_type="마크다운" if suffix in {".md", ".markdown"} else "텍스트",
+                source_location=f"paragraph {index}",
+                include_in_analysis=True,
+                created_at=utc_now(),
+            )
         for index, paragraph in enumerate(paragraphs, start=1)
     ]
 
@@ -181,7 +181,7 @@ def _parse_xlsx_segments(filename: str, content: bytes) -> ParsedUpload:
                 source_file=filename,
                 source_type="엑셀",
                 source_location=f"row {row_index + 2}",
-                include_in_analysis=True,
+                include_in_analysis=str(row.get(column_map.get("participant", ""), "")).strip() != "진행자",
                 created_at=utc_now(),
             )
         )
