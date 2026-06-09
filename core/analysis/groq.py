@@ -4,16 +4,32 @@ import json
 import re
 import time
 from collections import Counter
-from typing import Any
+from typing import Any, Literal
 
 import requests
 
+from core.config import (
+    get_analysis_chunk_max_tokens,
+    get_analysis_chunk_segment_chars,
+    get_analysis_chunk_size,
+    get_analysis_prompt_max_segments,
+    get_analysis_prompt_segment_chars,
+    get_analysis_synthesis_max_tokens,
+)
 from core.intake import Segment
 
 from .qualitative import AnalysisResult
 
 
 GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+ProviderName = Literal["Groq", "OpenRouter"]
+
+
+class ProviderRateLimitError(RuntimeError):
+    pass
 
 
 def run_groq_qualitative_analysis(
@@ -67,33 +83,84 @@ def run_groq_chunked_qualitative_analysis(
     model: str,
     timeout_seconds: int = 90,
     project_context: dict[str, Any] | None = None,
+    fallback_api_key: str = "",
+    fallback_model: str = "",
 ) -> AnalysisResult:
     included = [segment for segment in segments if segment.include_in_analysis and segment.content.strip()]
     if not included:
         raise ValueError("분석할 인터뷰 원문이 없습니다.")
 
-    chunks = _chunk_segments(included, chunk_size=10)
-    chunk_results: list[dict[str, Any]] = []
-    for index, chunk in enumerate(chunks, start=1):
-        chunk_results.append(
-            _chat_json(
-                api_key=api_key,
-                model=model,
-                system_prompt=_system_prompt(),
-                user_prompt=_chunk_prompt(chunk, index, len(chunks)),
-                timeout_seconds=timeout_seconds,
-                max_tokens=1000,
-            )
+    try:
+        return _run_chunked_with_provider(
+            included=included,
+            api_key=api_key,
+            model=model,
+            endpoint=GROQ_CHAT_COMPLETIONS_URL,
+            provider_name="Groq",
+            timeout_seconds=timeout_seconds,
+            project_context=project_context,
+            max_retries=0,
+        )
+    except ProviderRateLimitError:
+        if not fallback_api_key:
+            raise
+        return _run_chunked_with_provider(
+            included=included,
+            api_key=fallback_api_key,
+            model=fallback_model or "google/gemini-2.5-flash",
+            endpoint=OPENROUTER_CHAT_COMPLETIONS_URL,
+            provider_name="OpenRouter",
+            timeout_seconds=timeout_seconds,
+            project_context=project_context,
+            max_retries=1,
         )
 
-    synthesis = _chat_json(
+
+def _run_chunked_with_provider(
+    included: list[Segment],
+    api_key: str,
+    model: str,
+    endpoint: str,
+    provider_name: ProviderName,
+    timeout_seconds: int,
+    project_context: dict[str, Any] | None,
+    max_retries: int = 0,
+) -> AnalysisResult:
+    chunks = _chunk_segments(included, chunk_size=get_analysis_chunk_size())
+    chunk_results: list[dict[str, Any]] = []
+    for index, chunk in enumerate(chunks, start=1):
+        chunk_kwargs = dict(
+            api_key=api_key,
+            model=model,
+            endpoint=endpoint,
+            provider_name=provider_name,
+            system_prompt=_system_prompt(),
+            user_prompt=_chunk_prompt(chunk, index, len(chunks)),
+            timeout_seconds=timeout_seconds,
+            max_tokens=get_analysis_chunk_max_tokens(),
+            max_retries=max_retries,
+        )
+        try:
+            chunk_result = _chat_json(**chunk_kwargs)
+        except RuntimeError:
+            chunk_result = _chat_json(**chunk_kwargs)
+        chunk_results.append(chunk_result)
+
+    synthesis_kwargs = dict(
         api_key=api_key,
         model=model,
+        endpoint=endpoint,
+        provider_name=provider_name,
         system_prompt=_system_prompt(),
         user_prompt=_synthesis_prompt(chunk_results, included, project_context),
         timeout_seconds=timeout_seconds,
-        max_tokens=2800,
+        max_tokens=get_analysis_synthesis_max_tokens(),
+        max_retries=max_retries,
     )
+    try:
+        synthesis = _chat_json(**synthesis_kwargs)
+    except RuntimeError:
+        synthesis = _chat_json(**synthesis_kwargs)
     normalized = _normalize_result(synthesis, included)
     if not normalized["participant_mentions"]:
         normalized["participant_mentions"] = dict(Counter(segment.participant for segment in included))
@@ -103,13 +170,15 @@ def run_groq_chunked_qualitative_analysis(
 def _chat_json(
     api_key: str,
     model: str,
+    endpoint: str,
+    provider_name: ProviderName,
     system_prompt: str,
     user_prompt: str,
     timeout_seconds: int,
     max_tokens: int,
+    max_retries: int = 0,
 ) -> dict[str, Any]:
     payload = {
-        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -118,29 +187,50 @@ def _chat_json(
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
+    payload.update(_provider_model_payload(model, provider_name))
+    headers = _provider_headers(api_key, provider_name)
 
-    for attempt in range(3):
-        response = requests.post(
-            GROQ_CHAT_COMPLETIONS_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=timeout_seconds,
-        )
-        if response.status_code == 429 and attempt < 2:
-            retry_after = response.headers.get("retry-after")
-            wait_seconds = float(retry_after) if retry_after else 55.0
-            time.sleep(min(wait_seconds, 65.0))
-            continue
+    for attempt in range(max_retries + 1):
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
+        if response.status_code == 429:
+            if attempt < max_retries:
+                retry_after = response.headers.get("retry-after")
+                wait = min(float(retry_after) if retry_after else 15.0, 30.0)
+                time.sleep(wait)
+                continue
+            raise ProviderRateLimitError(f"{provider_name} API 한도 초과: {response.text[:500]}")
         if response.status_code >= 400:
-            raise RuntimeError(f"Groq API 오류: {response.status_code} {response.text[:500]}")
+            raise RuntimeError(f"{provider_name} API 오류: {response.status_code} {response.text[:500]}")
+        body = response.json()
+        choices = body.get("choices") or [{}]
+        content = choices[0].get("message", {}).get("content")
+        if not isinstance(content, str):
+            raise RuntimeError(
+                f"{provider_name}가 텍스트 응답 대신 null 또는 다른 형식을 반환했습니다 "
+                f"(content 타입: {type(content).__name__}). "
+                "응답 구조: " + str(body)[:300]
+            )
+        return _parse_json_response(content, provider_name)
 
-        content = response.json()["choices"][0]["message"]["content"]
-        return json.loads(_strip_code_fence(content))
+    raise ProviderRateLimitError(f"{provider_name} API 한도 초과: 재시도 횟수를 초과했습니다.")
 
-    raise RuntimeError("Groq API 호출을 완료하지 못했습니다.")
+
+def _provider_headers(api_key: str, provider_name: ProviderName) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if provider_name == "OpenRouter":
+        headers["HTTP-Referer"] = "http://localhost:3000"
+        headers["X-Title"] = "UX Research Insight Engine"
+    return headers
+
+
+def _provider_model_payload(model: str, provider_name: ProviderName) -> dict[str, Any]:
+    models = [item.strip() for item in model.split(",") if item.strip()]
+    if provider_name == "OpenRouter" and len(models) > 1:
+        return {"models": models}
+    return {"model": models[0] if models else model}
 
 
 def _system_prompt() -> str:
@@ -242,8 +332,8 @@ def _user_prompt(segments: list[Segment], project_context: dict[str, Any] | None
 
 
 def _select_segments_for_prompt(segments: list[Segment]) -> list[dict[str, Any]]:
-    max_segments = 45
-    max_chars_per_segment = 420
+    max_segments = get_analysis_prompt_max_segments()
+    max_chars_per_segment = get_analysis_prompt_segment_chars()
     selected: list[Segment] = []
     seen_participants: set[str] = set()
 
@@ -275,7 +365,8 @@ def _chunk_segments(segments: list[Segment], chunk_size: int) -> list[list[Segme
     return [segments[index : index + chunk_size] for index in range(0, len(segments), chunk_size)]
 
 
-def _compact_segment(segment: Segment, max_chars: int = 260) -> dict[str, Any]:
+def _compact_segment(segment: Segment, max_chars: int | None = None) -> dict[str, Any]:
+    max_chars = max_chars or get_analysis_chunk_segment_chars()
     return {
         "id": segment.id,
         "participant": segment.participant,
@@ -438,6 +529,56 @@ def _strip_code_fence(content: str) -> str:
     if match:
         return match.group(1)
     return content.strip()
+
+
+def _parse_json_response(content: str, provider_name: str) -> dict[str, Any]:
+    cleaned = _extract_json_object(_strip_code_fence(content))
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        repaired = _escape_raw_newlines_inside_strings(cleaned)
+        if repaired != cleaned:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+        raise RuntimeError(
+            f"{provider_name}가 분석 결과를 JSON 형식으로 완성하지 못했습니다. "
+            f"(응답 앞부분: {cleaned[:120]!r})"
+        ) from exc
+
+
+def _extract_json_object(content: str) -> str:
+    stripped = content.strip()
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        return stripped[start : end + 1]
+    return stripped
+
+
+def _escape_raw_newlines_inside_strings(content: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for char in content:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            result.append(char)
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            continue
+        if in_string and char in {"\n", "\r"}:
+            result.append("\\n")
+            continue
+        result.append(char)
+    return "".join(result)
 
 
 def _normalize_result(data: dict[str, Any], segments: list[Segment]) -> dict[str, Any]:

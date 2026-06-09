@@ -13,7 +13,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from core.analysis import run_groq_chunked_qualitative_analysis
-from core.config import get_groq_api_key, get_groq_model
+from core.config import get_groq_api_key, get_groq_model, get_openrouter_api_key, get_openrouter_model, get_openrouter_models
 from core.intake import parse_uploaded_research_file
 
 
@@ -35,6 +35,9 @@ class AnalyzeRequest(BaseModel):
     project_name: str = Field(default="새 리서치 분석")
     source_name: str = Field(default="붙여넣은 인터뷰.md")
     text: str = Field(min_length=1)
+    research_goal: str = Field(default="")
+    tasks: list[str] = Field(default_factory=list)
+    evaluation_criteria: list[str] = Field(default_factory=list)
 
 
 class ParseRequest(BaseModel):
@@ -48,6 +51,9 @@ def health() -> dict[str, Any]:
         "ok": True,
         "groq_key_configured": bool(get_groq_api_key()),
         "groq_model": get_groq_model(),
+        "openrouter_key_configured": bool(get_openrouter_api_key()),
+        "openrouter_model": get_openrouter_model(),
+        "openrouter_models": get_openrouter_models(),
     }
 
 
@@ -74,22 +80,39 @@ def analyze_interview(request: AnalyzeRequest) -> dict[str, Any]:
         project_name=request.project_name,
         source_name=request.source_name or "붙여넣은 인터뷰.md",
         content=request.text.encode("utf-8"),
+        project_context={
+            "research_goal": request.research_goal,
+            "tasks": request.tasks,
+            "evaluation_criteria": request.evaluation_criteria,
+        },
     )
 
 
 @app.post("/api/analyze-upload")
 async def analyze_uploaded_file(
     project_name: str = Form(default="새 리서치 분석"),
+    research_goal: str = Form(default=""),
+    tasks: str = Form(default=""),
+    evaluation_criteria: str = Form(default=""),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     filename = file.filename or "업로드한 인터뷰 자료.txt"
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="파일에 분석할 내용이 없습니다.")
-    return _analyze_content(project_name=project_name, source_name=filename, content=content)
+    return _analyze_content(
+        project_name=project_name,
+        source_name=filename,
+        content=content,
+        project_context={
+            "research_goal": research_goal,
+            "tasks": _split_lines(tasks),
+            "evaluation_criteria": _split_lines(evaluation_criteria),
+        },
+    )
 
 
-def _analyze_content(project_name: str, source_name: str, content: bytes) -> dict[str, Any]:
+def _analyze_content(project_name: str, source_name: str, content: bytes, project_context: dict[str, Any] | None = None) -> dict[str, Any]:
     api_key = get_groq_api_key()
     if not api_key:
         raise HTTPException(status_code=400, detail=".env에 GROQ_API_KEY를 먼저 설정하세요.")
@@ -107,6 +130,9 @@ def _analyze_content(project_name: str, source_name: str, content: bytes) -> dic
             api_key=api_key,
             model=get_groq_model(),
             timeout_seconds=120,
+            fallback_api_key=get_openrouter_api_key(),
+            fallback_model=",".join(get_openrouter_models()),
+            project_context=project_context,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -119,6 +145,10 @@ def _analyze_content(project_name: str, source_name: str, content: bytes) -> dic
         "analysis": result.to_dict(),
         "warnings": parsed.warnings,
     }
+
+
+def _split_lines(value: str) -> list[str]:
+    return [line.strip() for line in value.splitlines() if line.strip()]
 
 
 def _recognize_content(source_name: str, content: bytes) -> dict[str, Any]:
