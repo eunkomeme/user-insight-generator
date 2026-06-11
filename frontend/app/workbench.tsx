@@ -48,7 +48,7 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const DRAFT_STORAGE_KEY = "cxi-studio:draft:v1";
-type WorkspaceTab = "evidence" | "insights" | "synthesis" | "report";
+type WorkspaceTab = "sources" | "review" | "synthesis" | "report";
 
 const sampleText = `# SmartThings 요리 경험 인터뷰
 P1: 오븐 예열할 때는 앱을 쓰지만 실제로 켜졌는지 확인하기 전까지는 불안해요.
@@ -56,13 +56,6 @@ P2: 요리할 때 손에 물이나 기름이 묻어 있어서 폰을 만지는 �
 P3: 자동 조리는 좋아 보이지만 재료 양이나 냉동 상태가 다르면 그대로 믿기 어려워요.
 P5: 앱에서 가능한 것과 직접 해야 하는 것이 기기마다 달라서 헷갈려요.`;
 
-const steps = [
-  { id: "input", label: "소스 추가", description: "파일 먼저 등록" },
-  { id: "recognize", label: "자동 인식", description: "유형과 세그먼트 확인" },
-  { id: "analyze", label: "개별 분석", description: "소스별 인사이트" },
-  { id: "review", label: "검수", description: "승인/수정/제외" },
-  { id: "report", label: "보고서", description: "승인 항목 반영" }
-] as const;
 
 const analysisStages = [
   "파일 내용을 읽고 있습니다",
@@ -100,7 +93,7 @@ export default function Home() {
   const [recognizing, setRecognizing] = useState(false);
   const [error, setError] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("evidence");
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("sources");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recognitionResultRef = useRef<HTMLDivElement | null>(null);
   const draftRestoredRef = useRef(false);
@@ -125,7 +118,6 @@ export default function Home() {
     [reviewedInsights]
   );
   const needsReviewCount = reviewedInsights.filter((insight) => insight.reviewStatus === "수정 필요").length;
-  const activeStep = result ? "review" : recognition ? "analyze" : "input";
   const canRecognize = inputMode === "file" ? Boolean(file) : Boolean(text.trim());
   const canAnalyze = Boolean(recognition && (inputMode === "file" ? file : text.trim()));
   const reportMarkdown = useMemo(
@@ -242,7 +234,7 @@ export default function Home() {
       setReviewedInsights([]);
       setSegmentTopicOverrides({});
       await loadSources(selected.slug);
-      setWorkspaceTab("evidence");
+      setWorkspaceTab("sources");
       setProjectMessage("프로젝트를 불러왔습니다.");
     } catch (requestError) {
       setProjectMessage(requestError instanceof Error ? requestError.message : "프로젝트 선택 중 오류가 발생했습니다.");
@@ -351,7 +343,7 @@ export default function Home() {
         throw new Error(data.detail ?? "자료 인식에 실패했습니다.");
       }
       setRecognition(data);
-      setWorkspaceTab("evidence");
+      setWorkspaceTab("sources");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "자료 인식 중 오류가 발생했습니다.");
     } finally {
@@ -386,7 +378,7 @@ export default function Home() {
           reviewStatus: "수정 필요"
         }))
       );
-      setWorkspaceTab("insights");
+      setWorkspaceTab("review");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "분석 중 오류가 발생했습니다.");
     } finally {
@@ -522,7 +514,7 @@ export default function Home() {
         }))
       );
       setSources((current) => current.map((item) => (item.id === source.id ? data.source : item)));
-      setWorkspaceTab("insights");
+      setWorkspaceTab("review");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "소스 분석 중 오류가 발생했습니다.");
       setSources((current) => current.map((item) => (item.id === source.id ? { ...item, status: "오류" } : item)));
@@ -611,14 +603,13 @@ export default function Home() {
     setSegmentTopicOverrides({});
     setError("");
     setLastSavedAt("");
-    setWorkspaceTab("evidence");
+    setWorkspaceTab("sources");
   }
 
   return (
     <main className="min-h-screen text-[#141413]">
       <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col lg:flex-row">
         <Sidebar
-          activeStep={activeStep}
           activeProjectSlug={activeProjectSlug}
           approvedCount={approvedInsights.length}
           onCreateProject={createCurrentProject}
@@ -629,6 +620,7 @@ export default function Home() {
           needsReviewCount={needsReviewCount}
           projectName={projectName}
           projects={projects}
+          sourceCount={sources.length}
         />
 
         <section className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
@@ -645,7 +637,7 @@ export default function Home() {
             activeTab={workspaceTab}
             approvedCount={approvedInsights.length}
             canOpenInsights={Boolean(result)}
-            canOpenReport={Boolean(result)}
+            canOpenReport={approvedInsights.length > 0}
             canOpenSynthesis={sources.filter((source) => source.status === "분석완료").length >= 2}
             onChange={setWorkspaceTab}
             recognitionReady={Boolean(recognition)}
@@ -656,7 +648,7 @@ export default function Home() {
           <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
             <div className="grid min-w-0 gap-5">
               <AnimatePresence mode="popLayout">
-                {workspaceTab === "evidence" ? (
+                {workspaceTab === "sources" ? (
                   <MotionBlock key="evidence">
                     <div className="grid gap-5">
                       <InputPanel
@@ -717,7 +709,7 @@ export default function Home() {
                   </MotionBlock>
                 ) : null}
 
-                {workspaceTab === "insights" ? (
+                {workspaceTab === "review" ? (
                   <MotionBlock key="insights">
                     {result ? (
 	                    <AnalysisWorkspace
@@ -773,7 +765,6 @@ export default function Home() {
 }
 
 function Sidebar({
-  activeStep,
   activeProjectSlug,
   approvedCount,
   onCreateProject,
@@ -783,9 +774,9 @@ function Sidebar({
   projectMessage,
   needsReviewCount,
   projectName,
-  projects
+  projects,
+  sourceCount
 }: {
-  activeStep: string;
   activeProjectSlug: string;
   approvedCount: number;
   onCreateProject: () => void;
@@ -796,6 +787,7 @@ function Sidebar({
   needsReviewCount: number;
   projectName: string;
   projects: ProjectSummary[];
+  sourceCount: number;
 }) {
   return (
     <aside className="border-b border-[#e6dfd8] bg-[#faf9f5]/85 px-5 py-5 backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-80 lg:border-b-0 lg:border-r lg:px-6 lg:py-8">
@@ -826,37 +818,26 @@ function Sidebar({
         projects={projects}
       />
 
-      <nav className="mt-6 grid gap-2">
-        {steps.map((step, index) => {
-          const isActive = step.id === activeStep || (activeStep === "review" && step.id === "review");
-          return (
-            <div
-              className={cn(
-                "flex items-center gap-3 rounded-2xl border px-3 py-3 transition",
-                isActive ? "border-[#e6dfd8] bg-[#faf9f5] shadow-sm" : "border-transparent text-[#6c6a64]"
-              )}
-              key={step.id}
-            >
-              <span
-                className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded-full text-xs font-black",
-                  isActive ? "bg-[#141413] text-[#faf9f5]" : "bg-[#efe9de] text-[#6c6a64]"
-                )}
-              >
-                {index + 1}
-              </span>
-              <span>
-                <span className="block text-sm font-bold">{step.label}</span>
-                <span className="text-xs">{step.description}</span>
-              </span>
-            </div>
-          );
-        })}
-      </nav>
-
-      <div className="mt-8 hidden border-t border-[#e6dfd8] pt-5 text-sm text-[#6c6a64] lg:block">
-        <p>인사이트는 먼저 검수하고, 승인된 항목만 보고서에 반영됩니다.</p>
-        {needsReviewCount ? <p className="mt-3 font-semibold text-[#a9583e]">검수 대기 {needsReviewCount}개</p> : null}
+      <div className="mt-6 hidden rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4 lg:block">
+        <p className="mb-3 text-xs font-black uppercase text-[#6c6a64]">프로젝트 현황</p>
+        <div className="grid gap-2 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-[#6c6a64]">소스</span>
+            <span className="font-bold text-[#252523]">{sourceCount}개</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[#6c6a64]">미검수</span>
+            <span className={cn("font-bold", needsReviewCount ? "text-[#a9583e]" : "text-[#252523]")}>
+              {needsReviewCount}개
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[#6c6a64]">승인</span>
+            <span className={cn("font-bold", approvedCount ? "text-[#3d7a5f]" : "text-[#252523]")}>
+              {approvedCount}개
+            </span>
+          </div>
+        </div>
       </div>
     </aside>
   );
@@ -974,28 +955,28 @@ function WorkspaceNav({
     count?: string;
   }[] = [
     {
-      id: "evidence",
-      label: "소스",
-      description: sourceCount ? `${sourceCount}개 소스 관리` : recognitionReady ? "원자료 인식 완료" : "파일을 먼저 추가",
+      id: "sources",
+      label: "Sources",
+      description: sourceCount ? `${sourceCount}개 자료 관리` : recognitionReady ? "원자료 인식 완료" : "자료를 추가하세요",
     },
     {
-      id: "insights",
-      label: "개별 분석",
-      description: canOpenInsights ? "선택 소스의 인사이트" : "소스 분석 후 활성화",
+      id: "review",
+      label: "Review",
+      description: canOpenInsights ? (reviewCount ? `미검수 ${reviewCount}개` : "모두 검수됨") : "분석 후 활성화",
       disabled: !canOpenInsights,
-      count: canOpenInsights ? `${reviewCount} 대기` : undefined,
+      count: canOpenInsights && reviewCount ? `${reviewCount} 대기` : undefined,
     },
     {
       id: "synthesis",
-      label: "종합",
+      label: "Synthesis",
       description: canOpenSynthesis ? "소스 간 패턴 연결" : "분석 완료 소스 2개 필요",
       disabled: !canOpenSynthesis,
       count: canOpenSynthesis ? "준비됨" : undefined,
     },
     {
       id: "report",
-      label: "보고서",
-      description: canOpenReport ? "승인/종합 결과로 구성" : "분석 후 활성화",
+      label: "Report",
+      description: canOpenReport ? `승인 ${approvedCount}개 반영 중` : "인사이트 승인 후 활성화",
       disabled: !canOpenReport,
       count: canOpenReport ? `${approvedCount} 승인` : undefined,
     },
@@ -1712,25 +1693,22 @@ function AnalysisWorkspace({
 
   return (
     <div className="grid gap-5">
-      <Card className="overflow-hidden">
-        <CardContent className="bg-[#141413] p-6 text-[#faf9f5]">
-          <Badge variant="amber">핵심 결론</Badge>
-          <h3 className="mt-4 text-2xl font-black leading-tight">{topInsight?.title || "핵심 결론 생성 대기"}</h3>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-[#d9cbbb]">{topInsight?.summary || "분석 결과에서 핵심 결론을 찾지 못했습니다."}</p>
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            <MetricCard dark label="검수 대기" value={`${needsReviewCount}개`} />
-            <MetricCard dark label="승인" value={`${approvedInsights.length}개`} />
-            <MetricCard dark label="원문 단위" value={`${result.segment_count}개`} />
-          </div>
-        </CardContent>
-      </Card>
-
       <div className="grid gap-5 2xl:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)]">
         <Card className="overflow-hidden">
           <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <SectionKicker icon={<ClipboardCheck size={16} />} label="인사이트 큐" />
-              <h3 className="mt-2 text-lg font-black">AI 초안을 빠르게 훑고 선택하세요</h3>
+              <SectionKicker icon={<ClipboardCheck size={16} />} label="Review Queue" />
+              <h3 className="mt-2 text-lg font-black">근거를 확인하고 인사이트를 승인하세요</h3>
+              {topInsight ? (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-xs font-semibold text-[#6c6a64] hover:text-[#252523]">
+                    AI 초안 요약 보기
+                  </summary>
+                  <p className="mt-2 rounded-xl bg-[#f5f0e8] px-3 py-2 text-xs leading-5 text-[#6c6a64]">
+                    {topInsight.summary}
+                  </p>
+                </details>
+              ) : null}
             </div>
             <div className="grid grid-cols-4 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
               {(["all", "수정 필요", "승인", "제외"] as const).map((status) => (
