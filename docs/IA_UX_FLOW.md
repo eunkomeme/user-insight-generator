@@ -22,6 +22,22 @@
 
 ---
 
+## 0-1. 실제 앱 화면
+
+### Sources 탭 — 자료 인식 완료 상태
+
+![Sources tab](diagrams/app-sources-tab.png)
+
+### Findings 탭 — 인사이트 자동 반영 후
+
+![Findings tab](diagrams/app-findings-tab.png)
+
+### Report 탭 — 보고서 초안 즉시 생성
+
+![Report tab](diagrams/app-report-tab.png)
+
+---
+
 ## 1. 제품 개요
 
 **CXI Studio** (Customer Experience Intelligence Studio)는 UX 리서처가 인터뷰·설문·관찰 원자료를 올리면 AI가 발화를 파싱하고, 인사이트를 자동 분류하여 즉시 보고서 초안을 생성하는 워크벤치다.
