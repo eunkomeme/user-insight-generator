@@ -1,272 +1,135 @@
 # Technical Approach
 
-## 1. Architecture Summary
+## 1. Architecture
 
-v1은 Streamlit 기반 내부 MVP로 구현한다. 회사에서 Streamlit이 실행된 경험이 있고 외부 웹사이트 접속이 제한될 가능성이 높기 때문이다.
-
-```text
-Streamlit UI
-  -> analysis pipeline
-  -> LLM provider interface
-      -> CompanyLLMProvider
-      -> MockProvider
-      -> GroqProvider, local dev only
-  -> project folder storage
-  -> Markdown/JSON export
+```
+Next.js (App Router)
+  ↕ fetch → localhost:8000
+FastAPI (Python)
+  → core/intake        텍스트/CSV 파싱
+  → core/analysis      LLM 분석 파이프라인
+  → core/storage       프로젝트 파일시스템 저장
+  → LLM provider
+      GroqProvider      개발 환경 기본값
+      OpenRouterProvider 폴백
+      GaussProvider     운영 환경 (추후 추가)
 ```
 
-## 2. Proposed Package Structure
+## 2. Directory Structure
 
-```text
-app.py
+```
+backend/
+  main.py
+
 core/
   analysis/
-    text_analysis.py
-    csv_analysis.py
-    insight_schema.py
-  llm/
-    base.py
-    company.py
-    groq.py
-    mock.py
-  report/
-    builder.py
-    templates.py
+    groq.py            LLM 분석 (Groq / OpenRouter)
+    qualitative.py     분석 결과 데이터 모델
+    storage.py         세션 저장/불러오기
+  intake/
+    models.py          Segment 모델
+    parsers.py         txt/md 파싱
+    storage.py         입력 파일 저장
   storage/
-    projects.py
-    snapshots.py
+    projects.py        프로젝트 메타데이터 CRUD
+  config.py            환경변수
+
+frontend/
+  app/                 Next.js App Router
+  components/
+  lib/
+
+projects/              런타임 데이터 (gitignore)
 docs/
-  PRD.md
-  FEATURE_SPEC.md
-  SCREEN_DESIGN.md
-  REPORT_TEMPLATE.md
-  TECHNICAL_APPROACH.md
 ```
 
-## 3. Streamlit App Flow
+## 3. LLM Provider Interface
 
-### Session State
+모든 LLM 호출은 provider 모듈을 통해 이루어진다.
+환경변수로 provider를 선택한다.
 
-Streamlit session state should hold:
+현재 구현된 provider:
+- Groq (`GROQ_API_KEY`)
+- OpenRouter (`OPENROUTER_API_KEY`) — Groq rate limit 시 폴백
 
-- current_project
-- project_metadata
-- text_records
-- csv_data
-- column_mapping
-- generated_insights
-- approved_insights
-- report_draft
-- selected_provider
+추후 추가할 provider:
+- Gauss (`COMPANY_LLM_ENDPOINT`, `COMPANY_LLM_API_KEY`) — 운영 환경
 
-### Pages
+provider 추가 시 `core/analysis/groq.py`의 `_chat_json` 패턴을 참고해
+새 모듈을 추가하고 `core/config.py`에서 선택한다.
 
-Streamlit can use sidebar navigation or `st.tabs` for the v1 flow:
+## 4. Storage Strategy
 
-- Project Setup
-- Data Intake
-- Analysis Workspace
-- Insight Review
-- Report Builder
-- Export
-- Settings
+각 프로젝트는 `projects/{slug}/` 폴더에 저장된다.
 
-## 4. LLM Provider Interface
-
-The app should call all model providers through a common interface.
-
-```python
-class LLMProvider:
-    def generate_json(self, prompt: str, schema: dict) -> dict:
-        raise NotImplementedError
-
-    def generate_text(self, prompt: str) -> str:
-        raise NotImplementedError
 ```
-
-### CompanyLLMProvider
-
-- Default for company environment.
-- Reads endpoint and key from environment variables.
-- Calls only the company-approved LLM API.
-
-Expected environment variables:
-
-- `COMPANY_LLM_ENDPOINT`
-- `COMPANY_LLM_API_KEY`
-- `COMPANY_LLM_MODEL`
-
-### MockProvider
-
-- Default for local structure testing.
-- Returns deterministic fake insights and report text.
-- Does not call external services.
-
-### GroqProvider
-
-- Optional local development provider only.
-- Disabled by default in company environment.
-- Reads API key from environment variable.
-
-Expected environment variables:
-
-- `GROQ_API_KEY`
-- `GROQ_MODEL`
-
-## 5. Storage Strategy
-
-v1 should avoid making SQLite the operating default. Instead, each project is stored as a folder.
-
-```text
 projects/
-  {project_slug}/
+  {slug}/
     metadata.json
     inputs/
-      text_records.json
-      scores.csv
     analysis/
-      insights.json
-      score_summary.json
+      sessions/        타임스탬프 기반 분석 세션
     reports/
-      report.md
-    snapshot.json
 ```
 
-### Rationale
+- SQLite/DB 없음 — 파일시스템만 사용
+- 사내 배포 시 `PROJECTS_DIR` 환경변수로 경로 교체
 
-- Easier to inspect in early MVP.
-- Avoids introducing DB governance questions before internal validation.
-- Works in restricted network environments.
-- Can later migrate to Postgres or an internal storage system if approved.
+## 5. Insight Schema
 
-### Security Notes
-
-- Store real company data only in approved internal paths.
-- Do not commit `projects/` data.
-- Do not use real research data in personal or external development.
-- Do not log raw transcripts or sensitive quotes.
-
-## 6. Data Processing
-
-### Text Processing
-
-Text records should be normalized into:
-
-- id
-- source_type
-- participant
-- task
-- text
-- created_at
-
-The text analysis prompt should ask for:
-
-- pain points
-- usability issues
-- positive signals
-- representative quotes
-- related task
-- related participant
-- confidence
-
-### CSV Processing
-
-CSV analysis should calculate:
-
-- row count
-- participant count
-- task count
-- task-level averages
-- success rate
-- difficulty average
-- satisfaction average
-- error count summary
-
-CSV analysis should not require every optional column. It should use the mapped columns selected by the user.
-
-## 7. Insight Schema
-
-Recommended insight object:
+분석 결과 인사이트 객체 구조:
 
 ```json
 {
   "id": "insight_001",
-  "title": "Users miss the next-step action after task completion",
   "type": "usability_issue",
-  "summary": "Participants completed the form but hesitated because the next action was not visually clear.",
-  "severity": "high",
-  "frequency": "medium",
-  "confidence": "medium",
-  "related_tasks": ["Task 2"],
-  "related_participants": ["P1", "P4"],
-  "evidence": [
+  "title": "태스크 완료 후 다음 액션이 불명확해 사용자가 멈춘다",
+  "summary": "P1, P3, P4가 폼을 제출한 뒤 어디로 가야 할지 몰라 3-5초간 화면을 탐색했다.",
+  "severity": "높음",
+  "frequency": "보통",
+  "confidence": "높음",
+  "related_tasks": ["태스크 2"],
+  "related_participants": ["P1", "P3", "P4"],
+  "supporting_quotes": [
     {
-      "quote": "I am not sure what I should click next.",
+      "quote": "제출하고 나서 뭘 눌러야 하는지 모르겠어요.",
       "participant": "P1",
-      "task": "Task 2",
-      "source_id": "text_001"
+      "source_id": "seg_0012"
     }
   ],
+  "recommendation": "폼 제출 완료 시 명확한 다음 단계 CTA를 노출하고, 완료 상태와 이후 흐름을 분리해 표시한다.",
   "status": "draft"
 }
 ```
 
-## 8. Report Generation
+status 흐름: `draft → approved / rejected / merged`
+`approved` 상태만 보고서에 포함된다.
 
-Report generation should use only approved insights by default.
+## 6. CSV 처리 방식
 
-Process:
+컬럼 스펙을 고정하지 않는다.
+업로드 시 LLM이 헤더와 샘플 행을 보고 컬럼 의미를 추론한다.
+리서처는 추론 결과를 확인하고 수정할 수 있다.
 
-1. Collect project metadata.
-2. Collect approved insights.
-3. Collect score summary.
-4. Build section prompts.
-5. Generate Markdown sections.
-6. Save report draft.
+처리 순서:
+1. pandas로 CSV/XLSX 읽기
+2. 헤더 + 첫 3행 샘플을 LLM에 전달
+3. LLM이 각 컬럼의 역할(participant, task, success 등)을 JSON으로 반환
+4. 리서처 확인 후 분석 실행
 
-Report sections:
+## 7. Chunking
 
-- Executive Summary
-- Research Background
-- Method
-- Key Findings
-- Usability Issues
-- Score Summary
-- Evidence
-- Recommendations
-- Appendix
+긴 인터뷰 원문은 segment 단위로 chunking해서 분석한다.
+chunk 단위 1차 분석 → synthesis 단계로 최종 결과 통합.
+프롬프트에 원문 전체를 넣지 않는다.
 
-## 9. Deployment Assumptions
+환경변수로 chunk 크기 조정 가능:
+- `ANALYSIS_CHUNK_SIZE` (기본값: 10 segments)
+- `ANALYSIS_CHUNK_MAX_TOKENS` (기본값: 1500)
+- `ANALYSIS_SYNTHESIS_MAX_TOKENS` (기본값: 6000)
 
-### Local Development
+## 8. Session Memory
 
-- Streamlit app runs on localhost.
-- MockProvider is safe default.
-- GroqProvider can be used only with fake or de-identified data.
-
-### Company Environment
-
-- Streamlit runs on a company-approved machine.
-- Users access it through a browser on the company network.
-- CompanyLLMProvider is the default.
-- External providers can be disabled.
-- Storage path is configured to an approved internal location.
-
-## 10. v2 Migration Path
-
-Move beyond Streamlit only if the following conditions appear:
-
-- Multiple concurrent users need stable sessions.
-- Role-based access control becomes necessary.
-- Report editing requires richer document collaboration.
-- Internal deployment requires standard web app packaging.
-- Product usage grows beyond MVP validation.
-
-Potential v2 stack:
-
-- Next.js frontend
-- FastAPI backend
-- Postgres database
-- internal object storage
-- SSO/auth integration
-- audit logging
+이전 분석 세션의 인사이트 제목을 synthesis 프롬프트에 주입한다.
+같은 프로젝트의 반복 패턴을 LLM이 연결할 수 있도록 한다.
+최근 3개 세션만 참고한다 (`core/analysis/storage.py`).

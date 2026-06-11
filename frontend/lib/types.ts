@@ -39,10 +39,12 @@ export type Insight = {
   status: string;
 };
 
-export type ReviewStatus = "승인" | "수정 필요" | "제외";
+export type FindingStatus = "auto_included" | "needs_attention" | "hidden" | "edited" | "pinned";
+export type RiskFlag = "weak_evidence" | "overgeneralized" | "duplicate_candidate";
 
 export type ReviewedInsight = Insight & {
-  reviewStatus: ReviewStatus;
+  findingStatus: FindingStatus;
+  riskFlags: RiskFlag[];
 };
 
 export type ProjectSummary = {

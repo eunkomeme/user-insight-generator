@@ -35,11 +35,12 @@ import { cn } from "../lib/utils";
 import type {
   AnalysisResponse,
   DraftState,
+  FindingStatus,
   Insight,
   ProjectSummary,
   RecognitionResponse,
   ReviewedInsight,
-  ReviewStatus,
+  RiskFlag,
   Segment,
   SourceRecord,
   TabularPreviewResponse,
@@ -48,7 +49,7 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const DRAFT_STORAGE_KEY = "cxi-studio:draft:v1";
-type WorkspaceTab = "sources" | "review" | "synthesis" | "report";
+type WorkspaceTab = "sources" | "findings" | "synthesis" | "report";
 
 const sampleText = `# SmartThings 요리 경험 인터뷰
 P1: 오븐 예열할 때는 앱을 쓰지만 실제로 켜졌는지 확인하기 전까지는 불안해요.
@@ -113,16 +114,19 @@ export default function Home() {
     return map;
   }, [result]);
 
-  const approvedInsights = useMemo(
-    () => reviewedInsights.filter((insight) => insight.reviewStatus === "승인"),
+  const reportInsights = useMemo(
+    () => reviewedInsights.filter((i) =>
+      i.findingStatus === "auto_included" || i.findingStatus === "pinned" || i.findingStatus === "edited"
+    ),
     [reviewedInsights]
   );
-  const needsReviewCount = reviewedInsights.filter((insight) => insight.reviewStatus === "수정 필요").length;
+  const attentionCount = reviewedInsights.filter((i) => i.findingStatus === "needs_attention").length;
+  const autoIncludedCount = reviewedInsights.filter((i) => i.findingStatus === "auto_included").length;
   const canRecognize = inputMode === "file" ? Boolean(file) : Boolean(text.trim());
   const canAnalyze = Boolean(recognition && (inputMode === "file" ? file : text.trim()));
   const reportMarkdown = useMemo(
-    () => buildReportMarkdown(projectName, recognition, result, approvedInsights, segmentById),
-    [projectName, recognition, result, approvedInsights, segmentById]
+    () => buildReportMarkdown(projectName, recognition, result, reportInsights, segmentById),
+    [projectName, recognition, result, reportInsights, segmentById]
   );
 
   async function loadProjects() {
@@ -329,6 +333,13 @@ export default function Home() {
     }
   }, [activeProjectSlug, evaluationCriteriaText, inputMode, projectName, recognition, researchGoal, result, reviewedInsights, segmentTopicOverrides, sourceName, tasksText, text]);
 
+  function assignFindingStatus(insight: Insight): Pick<ReviewedInsight, "findingStatus" | "riskFlags"> {
+    const quoteCount = insight.supporting_quotes?.length ?? 0;
+    if (quoteCount === 0) return { findingStatus: "needs_attention", riskFlags: ["weak_evidence"] };
+    if (insight.confidence === "낮음") return { findingStatus: "needs_attention", riskFlags: ["overgeneralized"] };
+    return { findingStatus: "auto_included", riskFlags: [] };
+  }
+
   async function recognize(selectedFile = file) {
     setRecognizing(true);
     setError("");
@@ -375,10 +386,10 @@ export default function Home() {
       setReviewedInsights(
         data.analysis.insights.map((insight: Insight) => ({
           ...insight,
-          reviewStatus: "수정 필요"
+          ...assignFindingStatus(insight),
         }))
       );
-      setWorkspaceTab("review");
+      setWorkspaceTab("report");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "분석 중 오류가 발생했습니다.");
     } finally {
@@ -510,11 +521,11 @@ export default function Home() {
       setReviewedInsights(
         data.analysis.insights.map((insight: Insight) => ({
           ...insight,
-          reviewStatus: "수정 필요"
+          ...assignFindingStatus(insight),
         }))
       );
       setSources((current) => current.map((item) => (item.id === source.id ? data.source : item)));
-      setWorkspaceTab("review");
+      setWorkspaceTab("report");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "소스 분석 중 오류가 발생했습니다.");
       setSources((current) => current.map((item) => (item.id === source.id ? { ...item, status: "오류" } : item)));
@@ -611,13 +622,13 @@ export default function Home() {
       <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col lg:flex-row">
         <Sidebar
           activeProjectSlug={activeProjectSlug}
-          approvedCount={approvedInsights.length}
+          autoIncludedCount={autoIncludedCount}
           onCreateProject={createCurrentProject}
           onDeleteProject={removeProject}
           onSelectProject={selectProject}
           projectLoading={projectLoading}
           projectMessage={projectMessage}
-          needsReviewCount={needsReviewCount}
+          attentionCount={attentionCount}
           projectName={projectName}
           projects={projects}
           sourceCount={sources.length}
@@ -625,7 +636,7 @@ export default function Home() {
 
         <section className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
           <WorkbenchHeader
-            approvedCount={approvedInsights.length}
+            reportInsightsCount={reportInsights.length}
             canDownload={Boolean(reportMarkdown)}
             lastSavedAt={lastSavedAt}
             onClearDraft={clearDraft}
@@ -635,13 +646,13 @@ export default function Home() {
           />
           <WorkspaceNav
             activeTab={workspaceTab}
-            approvedCount={approvedInsights.length}
+            autoIncludedCount={autoIncludedCount}
+            attentionCount={attentionCount}
             canOpenInsights={Boolean(result)}
-            canOpenReport={approvedInsights.length > 0}
+            canOpenReport={Boolean(result)}
             canOpenSynthesis={sources.filter((source) => source.status === "분석완료").length >= 2}
             onChange={setWorkspaceTab}
             recognitionReady={Boolean(recognition)}
-            reviewCount={needsReviewCount}
             sourceCount={sources.length}
           />
 
@@ -709,24 +720,24 @@ export default function Home() {
                   </MotionBlock>
                 ) : null}
 
-                {workspaceTab === "review" ? (
+                {workspaceTab === "findings" ? (
                   <MotionBlock key="insights">
                     {result ? (
-	                    <AnalysisWorkspace
-	                      approvedInsights={approvedInsights}
-	                      needsReviewCount={needsReviewCount}
-	                      onMoveSegment={(segmentId, topicId) =>
-	                        setSegmentTopicOverrides((current) => ({
-	                          ...current,
-	                          [segmentId]: topicId
-	                        }))
-	                      }
-	                      onUpdateInsight={updateInsight}
-	                      result={result}
-	                      reviewedInsights={reviewedInsights}
-	                      segmentById={segmentById}
-	                      segmentTopicOverrides={segmentTopicOverrides}
-	                    />
+                      <FindingsWorkspace
+                        attentionCount={attentionCount}
+                        onMoveSegment={(segmentId, topicId) =>
+                          setSegmentTopicOverrides((current) => ({
+                            ...current,
+                            [segmentId]: topicId
+                          }))
+                        }
+                        onUpdateInsight={updateInsight}
+                        reportInsights={reportInsights}
+                        result={result}
+                        reviewedInsights={reviewedInsights}
+                        segmentById={segmentById}
+                        segmentTopicOverrides={segmentTopicOverrides}
+                      />
                     ) : (
                       <EmptyAnalysisState analysisStage={analysisStages[analysisStageIndex]} canAnalyze={canAnalyze} loading={loading} onAnalyze={analyze} />
                     )}
@@ -736,7 +747,8 @@ export default function Home() {
                 {workspaceTab === "report" && result ? (
                   <MotionBlock key="report">
                     <ReportPanel
-                      approvedInsights={approvedInsights}
+                      attentionCount={attentionCount}
+                      reportInsights={reportInsights}
                       onDownload={() => downloadMarkdown(reportMarkdown)}
                       recognition={recognition}
                       reportMarkdown={reportMarkdown}
@@ -766,25 +778,25 @@ export default function Home() {
 
 function Sidebar({
   activeProjectSlug,
-  approvedCount,
+  autoIncludedCount,
   onCreateProject,
   onDeleteProject,
   onSelectProject,
   projectLoading,
   projectMessage,
-  needsReviewCount,
+  attentionCount,
   projectName,
   projects,
   sourceCount
 }: {
   activeProjectSlug: string;
-  approvedCount: number;
+  autoIncludedCount: number;
   onCreateProject: () => void;
   onDeleteProject: (project: ProjectSummary) => void;
   onSelectProject: (project: ProjectSummary) => void;
   projectLoading: boolean;
   projectMessage: string;
-  needsReviewCount: number;
+  attentionCount: number;
   projectName: string;
   projects: ProjectSummary[];
   sourceCount: number;
@@ -805,7 +817,7 @@ function Sidebar({
             <p className="mt-2 line-clamp-2 text-sm font-semibold leading-6 text-[#252523]">{projectName}</p>
           </div>
         </div>
-        <Badge variant={approvedCount ? "green" : "muted"}>{approvedCount ? `승인 ${approvedCount}` : "초안"}</Badge>
+        <Badge variant={autoIncludedCount ? "green" : "muted"}>{autoIncludedCount ? `자동 반영 ${autoIncludedCount}` : "초안"}</Badge>
       </div>
 
       <ProjectSwitcher
@@ -826,15 +838,13 @@ function Sidebar({
             <span className="font-bold text-[#252523]">{sourceCount}개</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-[#6c6a64]">미검수</span>
-            <span className={cn("font-bold", needsReviewCount ? "text-[#a9583e]" : "text-[#252523]")}>
-              {needsReviewCount}개
-            </span>
+            <span className="text-[#6c6a64]">자동 반영</span>
+            <span className="font-bold text-[#252523]">{autoIncludedCount}개</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-[#6c6a64]">승인</span>
-            <span className={cn("font-bold", approvedCount ? "text-[#3d7a5f]" : "text-[#252523]")}>
-              {approvedCount}개
+            <span className="text-[#6c6a64]">확인 필요</span>
+            <span className={cn("font-bold", attentionCount ? "text-[#a9583e]" : "text-[#252523]")}>
+              {attentionCount}개
             </span>
           </div>
         </div>
@@ -928,23 +938,23 @@ function ProjectSwitcher({
 
 function WorkspaceNav({
   activeTab,
-  approvedCount,
+  autoIncludedCount,
+  attentionCount,
   canOpenInsights,
   canOpenReport,
   canOpenSynthesis,
   onChange,
   recognitionReady,
-  reviewCount,
   sourceCount
 }: {
   activeTab: WorkspaceTab;
-  approvedCount: number;
+  autoIncludedCount: number;
+  attentionCount: number;
   canOpenInsights: boolean;
   canOpenReport: boolean;
   canOpenSynthesis: boolean;
   onChange: (tab: WorkspaceTab) => void;
   recognitionReady: boolean;
-  reviewCount: number;
   sourceCount: number;
 }) {
   const tabs: {
@@ -960,11 +970,13 @@ function WorkspaceNav({
       description: sourceCount ? `${sourceCount}개 자료 관리` : recognitionReady ? "원자료 인식 완료" : "자료를 추가하세요",
     },
     {
-      id: "review",
-      label: "Review",
-      description: canOpenInsights ? (reviewCount ? `미검수 ${reviewCount}개` : "모두 검수됨") : "분석 후 활성화",
+      id: "findings",
+      label: "Findings",
+      description: canOpenInsights
+        ? `자동 반영 ${autoIncludedCount}개 · 확인 필요 ${attentionCount}개`
+        : "분석 후 활성화",
       disabled: !canOpenInsights,
-      count: canOpenInsights && reviewCount ? `${reviewCount} 대기` : undefined,
+      count: canOpenInsights && attentionCount ? `${attentionCount} 확인` : undefined,
     },
     {
       id: "synthesis",
@@ -976,9 +988,9 @@ function WorkspaceNav({
     {
       id: "report",
       label: "Report",
-      description: canOpenReport ? `승인 ${approvedCount}개 반영 중` : "인사이트 승인 후 활성화",
+      description: canOpenReport ? "보고서 초안 준비됨" : "분석 후 활성화",
       disabled: !canOpenReport,
-      count: canOpenReport ? `${approvedCount} 승인` : undefined,
+      count: canOpenReport ? "초안 준비" : undefined,
     },
   ];
 
@@ -1032,7 +1044,7 @@ function ColorChips({ className }: { className?: string }) {
 }
 
 function WorkbenchHeader({
-  approvedCount,
+  reportInsightsCount,
   canDownload,
   lastSavedAt,
   onClearDraft,
@@ -1040,7 +1052,7 @@ function WorkbenchHeader({
   recognition,
   result
 }: {
-  approvedCount: number;
+  reportInsightsCount: number;
   canDownload: boolean;
   lastSavedAt: string;
   onClearDraft: () => void;
@@ -1049,7 +1061,7 @@ function WorkbenchHeader({
   result: AnalysisResponse | null;
 }) {
   const helper = result
-    ? "생성된 인사이트를 검수하고 승인된 항목으로 보고서 초안을 다듬으세요."
+    ? "인사이트가 자동으로 보고서에 반영됩니다. 확인 필요 항목만 선택적으로 검토하세요."
     : recognition
       ? "자료 구조가 확인되었습니다. 이제 AI 분석을 실행할 수 있습니다."
       : "리서치 원자료를 추가하면 화자와 섹션을 먼저 인식합니다.";
@@ -1061,7 +1073,7 @@ function WorkbenchHeader({
             <Badge variant="amber">CXI Studio</Badge>
             <Badge variant="blue">리서치 워크벤치</Badge>
             <Badge variant={result ? "green" : recognition ? "amber" : "muted"}>
-              {result ? "분석 완료" : recognition ? "자료 인식 완료" : "자료 대기"}
+              {result ? "보고서 초안" : recognition ? "자료 인식 완료" : "자료 대기"}
             </Badge>
             <Badge variant="muted">{lastSavedAt ? `자동 저장 ${formatSavedTime(lastSavedAt)}` : "자동 저장 준비"}</Badge>
           </div>
@@ -1077,8 +1089,8 @@ function WorkbenchHeader({
             보고서 다운로드
           </Button>
           <div className="rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] px-4 py-3">
-            <p className="text-xs font-bold text-[#6c6a64]">승인된 인사이트</p>
-            <p className="mt-1 text-2xl font-black text-[#141413]">{approvedCount}</p>
+            <p className="text-xs font-bold text-[#6c6a64]">보고서 반영 인사이트</p>
+            <p className="mt-1 text-2xl font-black text-[#141413]">{reportInsightsCount}</p>
           </div>
         </div>
       </div>
@@ -1656,30 +1668,29 @@ function SupportPanel({ result }: { result: AnalysisResponse | null }) {
   );
 }
 
-function AnalysisWorkspace({
-  approvedInsights,
-  needsReviewCount,
+function FindingsWorkspace({
+  attentionCount,
   onMoveSegment,
   onUpdateInsight,
+  reportInsights,
   result,
   reviewedInsights,
   segmentById,
   segmentTopicOverrides
 }: {
-  approvedInsights: ReviewedInsight[];
-  needsReviewCount: number;
+  attentionCount: number;
   onMoveSegment: (segmentId: string, topicId: string) => void;
   onUpdateInsight: (insightId: string, updates: Partial<ReviewedInsight>) => void;
+  reportInsights: ReviewedInsight[];
   result: AnalysisResponse;
   reviewedInsights: ReviewedInsight[];
   segmentById: Map<string, Segment>;
   segmentTopicOverrides: Record<string, string>;
 }) {
-  const topInsight = result.analysis.insights[0];
   const [selectedInsightId, setSelectedInsightId] = useState(reviewedInsights[0]?.id ?? "");
-  const [filter, setFilter] = useState<"all" | ReviewStatus>("all");
+  const [filter, setFilter] = useState<"all" | FindingStatus>("all");
   const selectedInsight = reviewedInsights.find((insight) => insight.id === selectedInsightId) ?? reviewedInsights[0];
-  const filteredInsights = reviewedInsights.filter((insight) => filter === "all" || insight.reviewStatus === filter);
+  const filteredInsights = reviewedInsights.filter((insight) => filter === "all" || insight.findingStatus === filter);
 
   useEffect(() => {
     if (!reviewedInsights.length) {
@@ -1691,27 +1702,44 @@ function AnalysisWorkspace({
     }
   }, [reviewedInsights, selectedInsightId]);
 
+  function findingStatusLabel(status: FindingStatus) {
+    switch (status) {
+      case "auto_included": return "자동 반영";
+      case "needs_attention": return "확인 필요";
+      case "hidden": return "숨김";
+      case "pinned": return "고정";
+      case "edited": return "수정됨";
+    }
+  }
+
+  function findingStatusBadgeVariant(status: FindingStatus) {
+    if (status === "auto_included" || status === "pinned") return "green" as const;
+    if (status === "needs_attention") return "amber" as const;
+    return "muted" as const;
+  }
+
+  function riskFlagLabel(flag: RiskFlag) {
+    switch (flag) {
+      case "weak_evidence": return "근거 부족";
+      case "overgeneralized": return "일반화 주의";
+      case "duplicate_candidate": return "중복 가능성";
+    }
+  }
+
   return (
     <div className="grid gap-5">
       <div className="grid gap-5 2xl:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)]">
         <Card className="overflow-hidden">
           <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <SectionKicker icon={<ClipboardCheck size={16} />} label="Review Queue" />
-              <h3 className="mt-2 text-lg font-black">근거를 확인하고 인사이트를 승인하세요</h3>
-              {topInsight ? (
-                <details className="mt-3">
-                  <summary className="cursor-pointer text-xs font-semibold text-[#6c6a64] hover:text-[#252523]">
-                    AI 초안 요약 보기
-                  </summary>
-                  <p className="mt-2 rounded-xl bg-[#f5f0e8] px-3 py-2 text-xs leading-5 text-[#6c6a64]">
-                    {topInsight.summary}
-                  </p>
-                </details>
+              <SectionKicker icon={<ClipboardCheck size={16} />} label="Findings" />
+              <h3 className="mt-2 text-lg font-black">인사이트 결과가 자동으로 반영되었습니다</h3>
+              {attentionCount > 0 ? (
+                <p className="mt-1 text-sm font-semibold text-[#a9583e]">확인 필요 {attentionCount}개가 있습니다</p>
               ) : null}
             </div>
             <div className="grid grid-cols-4 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
-              {(["all", "수정 필요", "승인", "제외"] as const).map((status) => (
+              {(["all", "auto_included", "needs_attention", "hidden"] as const).map((status) => (
                 <button
                   className={cn(
                     "rounded-lg px-3 py-2 transition",
@@ -1721,7 +1749,7 @@ function AnalysisWorkspace({
                   onClick={() => setFilter(status)}
                   type="button"
                 >
-                  {status === "all" ? "전체" : status}
+                  {status === "all" ? "전체" : findingStatusLabel(status)}
                 </button>
               ))}
             </div>
@@ -1736,7 +1764,7 @@ function AnalysisWorkspace({
                       className={cn(
                         "relative rounded-2xl border bg-[#faf9f5] p-4 text-left shadow-sm transition hover:border-[#cc785c]/60",
                         isSelected ? "border-[#cc785c] ring-1 ring-[#cc785c]/30" : "border-[#e6dfd8]",
-                        insight.reviewStatus === "제외" && "opacity-60"
+                        insight.findingStatus === "hidden" && "opacity-60"
                       )}
                       key={insight.id}
                       onClick={() => setSelectedInsightId(insight.id)}
@@ -1745,9 +1773,12 @@ function AnalysisWorkspace({
                       {isSelected ? <span className="absolute bottom-3 left-0 top-3 w-1 rounded-r-full bg-[#cc785c]" /> : null}
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex flex-wrap gap-2">
-                          <Badge variant={insight.reviewStatus === "승인" ? "green" : insight.reviewStatus === "제외" ? "muted" : "amber"}>
-                            {insight.reviewStatus}
+                          <Badge variant={findingStatusBadgeVariant(insight.findingStatus)}>
+                            {findingStatusLabel(insight.findingStatus)}
                           </Badge>
+                          {insight.riskFlags.map((flag) => (
+                            <Badge key={flag} variant="muted">{riskFlagLabel(flag)}</Badge>
+                          ))}
                           <Badge variant="muted">{readableInsightType(insight.type)}</Badge>
                         </div>
                         <span className="text-xs font-black text-[#8e8b82]">{index + 1}</span>
@@ -1809,21 +1840,29 @@ function InsightInspector({
           <SectionKicker icon={<Sparkles size={16} />} label="상세 검수" />
           <h3 className="mt-2 text-lg font-black">근거와 제안을 함께 확인하세요</h3>
         </div>
-        <div className="grid grid-cols-3 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
-          {(["승인", "수정 필요", "제외"] as ReviewStatus[]).map((status) => (
-            <button
-              className={cn(
-                "flex items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
-                insight.reviewStatus === status && "bg-[#faf9f5] text-[#141413] shadow-sm"
-              )}
-              key={status}
-              onClick={() => onUpdateInsight(insight.id, { reviewStatus: status })}
-              type="button"
-            >
-              {status === "승인" ? <CheckCircle2 size={14} /> : status === "제외" ? <CircleSlash size={14} /> : null}
-              {status}
-            </button>
-          ))}
+        <div className="flex gap-2 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
+          <button
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
+              insight.findingStatus === "pinned" && "bg-[#faf9f5] text-[#141413] shadow-sm"
+            )}
+            onClick={() => onUpdateInsight(insight.id, { findingStatus: "pinned" })}
+            type="button"
+          >
+            <BadgeCheck size={14} />
+            고정
+          </button>
+          <button
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
+              insight.findingStatus === "hidden" && "bg-[#faf9f5] text-[#141413] shadow-sm"
+            )}
+            onClick={() => onUpdateInsight(insight.id, { findingStatus: "hidden" })}
+            type="button"
+          >
+            <CircleSlash size={14} />
+            숨기기
+          </button>
         </div>
       </CardHeader>
       <CardContent className="grid gap-5">
@@ -1840,7 +1879,7 @@ function InsightInspector({
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Field label="인사이트 제목">
-            <Input value={insight.title} onChange={(event) => onUpdateInsight(insight.id, { title: event.target.value, reviewStatus: "수정 필요" })} />
+            <Input value={insight.title} onChange={(event) => onUpdateInsight(insight.id, { title: event.target.value, findingStatus: "edited" })} />
           </Field>
           <Field label="유형">
             <Input value={readableInsightType(insight.type)} readOnly />
@@ -1851,14 +1890,14 @@ function InsightInspector({
           <Textarea
             className="min-h-28"
             value={insight.summary}
-            onChange={(event) => onUpdateInsight(insight.id, { summary: event.target.value, reviewStatus: "수정 필요" })}
+            onChange={(event) => onUpdateInsight(insight.id, { summary: event.target.value, findingStatus: "edited" })}
           />
         </Field>
 
         <div className="grid gap-4 lg:grid-cols-3">
           {(["severity", "frequency", "confidence"] as const).map((field) => (
             <Field key={field} label={field === "severity" ? "영향도" : field === "frequency" ? "빈도" : "신뢰도"}>
-              <Input value={insight[field]} onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, reviewStatus: "수정 필요" })} />
+              <Input value={insight[field]} onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, findingStatus: "edited" })} />
             </Field>
           ))}
         </div>
@@ -1867,7 +1906,7 @@ function InsightInspector({
           <Textarea
             className="min-h-28"
             value={insight.recommendation}
-            onChange={(event) => onUpdateInsight(insight.id, { recommendation: event.target.value, reviewStatus: "수정 필요" })}
+            onChange={(event) => onUpdateInsight(insight.id, { recommendation: event.target.value, findingStatus: "edited" })}
           />
         </Field>
 
@@ -1920,9 +1959,9 @@ function InsightReviewCard({
     <motion.article
       className={cn(
         "rounded-2xl border bg-white p-4 shadow-sm transition",
-        insight.reviewStatus === "승인" && "border-emerald-200 bg-emerald-50/30",
-        insight.reviewStatus === "수정 필요" && "border-amber-200",
-        insight.reviewStatus === "제외" && "border-slate-200 opacity-65"
+        (insight.findingStatus === "auto_included" || insight.findingStatus === "pinned" || insight.findingStatus === "edited") && "border-emerald-200 bg-emerald-50/30",
+        insight.findingStatus === "needs_attention" && "border-amber-200",
+        insight.findingStatus === "hidden" && "border-slate-200 opacity-65"
       )}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
@@ -1931,25 +1970,33 @@ function InsightReviewCard({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">{index + 1}</span>
-          <Badge variant={insight.reviewStatus === "승인" ? "green" : insight.reviewStatus === "제외" ? "muted" : "amber"}>
-            {insight.reviewStatus}
+          <Badge variant={(insight.findingStatus === "auto_included" || insight.findingStatus === "pinned") ? "green" : insight.findingStatus === "hidden" ? "muted" : "amber"}>
+            {insight.findingStatus === "auto_included" ? "자동 반영" : insight.findingStatus === "needs_attention" ? "확인 필요" : insight.findingStatus === "pinned" ? "고정" : insight.findingStatus === "edited" ? "수정됨" : "숨김"}
           </Badge>
         </div>
-        <div className="grid grid-cols-3 rounded-xl bg-slate-100 p-1 text-xs font-bold text-slate-500">
-          {(["승인", "수정 필요", "제외"] as ReviewStatus[]).map((status) => (
-            <button
-              className={cn(
-                "flex items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
-                insight.reviewStatus === status && "bg-white text-slate-950 shadow-sm"
-              )}
-              key={status}
-              onClick={() => onUpdateInsight(insight.id, { reviewStatus: status })}
-              type="button"
-            >
-              {status === "승인" ? <CheckCircle2 size={14} /> : status === "제외" ? <CircleSlash size={14} /> : null}
-              {status}
-            </button>
-          ))}
+        <div className="flex gap-1 rounded-xl bg-slate-100 p-1 text-xs font-bold text-slate-500">
+          <button
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
+              insight.findingStatus === "pinned" && "bg-white text-slate-950 shadow-sm"
+            )}
+            onClick={() => onUpdateInsight(insight.id, { findingStatus: "pinned" })}
+            type="button"
+          >
+            <BadgeCheck size={14} />
+            고정
+          </button>
+          <button
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
+              insight.findingStatus === "hidden" && "bg-white text-slate-950 shadow-sm"
+            )}
+            onClick={() => onUpdateInsight(insight.id, { findingStatus: "hidden" })}
+            type="button"
+          >
+            <CircleSlash size={14} />
+            숨기기
+          </button>
         </div>
       </div>
 
@@ -1975,13 +2022,13 @@ function InsightReviewCard({
         </summary>
         <div className="mt-4 grid gap-4">
           <Field label="인사이트 제목">
-            <Input value={insight.title} onChange={(event) => onUpdateInsight(insight.id, { title: event.target.value, reviewStatus: "수정 필요" })} />
+            <Input value={insight.title} onChange={(event) => onUpdateInsight(insight.id, { title: event.target.value, findingStatus: "edited" })} />
           </Field>
           <Field label="구조적 해석">
             <Textarea
               className="min-h-28"
               value={insight.summary}
-              onChange={(event) => onUpdateInsight(insight.id, { summary: event.target.value, reviewStatus: "수정 필요" })}
+              onChange={(event) => onUpdateInsight(insight.id, { summary: event.target.value, findingStatus: "edited" })}
             />
           </Field>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -1991,7 +2038,7 @@ function InsightReviewCard({
                   <Input
                     key={field}
                     value={insight[field]}
-                    onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, reviewStatus: "수정 필요" })}
+                    onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, findingStatus: "edited" })}
                   />
                 ))}
               </div>
@@ -2000,7 +2047,7 @@ function InsightReviewCard({
               <Textarea
                 className="min-h-24"
                 value={insight.recommendation}
-                onChange={(event) => onUpdateInsight(insight.id, { recommendation: event.target.value, reviewStatus: "수정 필요" })}
+                onChange={(event) => onUpdateInsight(insight.id, { recommendation: event.target.value, findingStatus: "edited" })}
               />
             </Field>
           </div>
@@ -2025,15 +2072,17 @@ function InsightReviewCard({
 }
 
 function ReportPanel({
-  approvedInsights,
+  attentionCount,
   onDownload,
   recognition,
+  reportInsights,
   reportMarkdown,
   result
 }: {
-  approvedInsights: ReviewedInsight[];
+  attentionCount: number;
   onDownload: () => void;
   recognition: RecognitionResponse | null;
+  reportInsights: ReviewedInsight[];
   reportMarkdown: string;
   result: AnalysisResponse;
 }) {
@@ -2042,7 +2091,7 @@ function ReportPanel({
       <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <SectionKicker icon={<FileText size={16} />} label="4. 보고서 초안" />
-          <h3 className="mt-2 text-lg font-black">승인된 인사이트로 보고서를 구성했습니다</h3>
+          <h3 className="mt-2 text-lg font-black">자동 반영된 인사이트로 보고서를 구성했습니다</h3>
         </div>
         <Button disabled={!reportMarkdown} onClick={onDownload} variant="secondary">
           <Download size={18} />
@@ -2050,22 +2099,27 @@ function ReportPanel({
         </Button>
       </CardHeader>
       <CardContent>
-        {approvedInsights.length ? (
+        {attentionCount > 0 && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            확인 필요 {attentionCount}개 — Findings 탭에서 검토하세요.
+          </div>
+        )}
+        {reportInsights.length ? (
           <div className="rounded-3xl border border-slate-200 bg-white p-6">
             <article className="mx-auto max-w-3xl">
               <p className="text-sm font-bold text-slate-500">UX 리서치 보고서 초안</p>
               <h2 className="mt-2 text-2xl font-black ">{result.project_name}</h2>
               <div className="mt-5 grid gap-3 sm:grid-cols-3">
                 <MetricCard label="자료" value={result.source_name} />
-                <MetricCard label="승인 인사이트" value={`${approvedInsights.length}개`} />
+                <MetricCard label="반영 인사이트" value={`${reportInsights.length}개`} />
                 <MetricCard label="자료 유형" value={recognition?.source_type || "미확인"} />
               </div>
               <ReportSection title="Executive Summary">
-                이번 분석에서는 {approvedInsights.length}개의 핵심 인사이트를 승인했습니다. 승인된 항목은 아래 핵심 발견과 개선 제안에 반영됩니다.
+                이번 분석에서는 {reportInsights.length}개의 핵심 인사이트가 자동으로 반영되었습니다. 반영된 항목은 아래 핵심 발견과 개선 제안에 포함됩니다.
               </ReportSection>
               <ReportSection title="핵심 발견">
                 <div className="grid gap-4">
-                  {approvedInsights.map((insight, index) => (
+                  {reportInsights.map((insight, index) => (
                     <div className="rounded-2xl bg-slate-50 p-4" key={insight.id}>
                       <h4 className="font-black">{index + 1}. {insight.title}</h4>
                       <p className="mt-2 text-sm leading-6 text-slate-600">{insight.summary}</p>
@@ -2081,7 +2135,7 @@ function ReportPanel({
           </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm leading-6 text-slate-500">
-            승인된 인사이트가 아직 없습니다. 검수 카드에서 보고서에 넣을 인사이트를 승인하면 초안이 생성됩니다.
+            분석이 완료되면 자동 반영 인사이트로 보고서 초안이 생성됩니다.
           </div>
         )}
       </CardContent>
@@ -2402,16 +2456,16 @@ function buildReportMarkdown(
   projectName: string,
   recognition: RecognitionResponse | null,
   result: AnalysisResponse | null,
-  approvedInsights: ReviewedInsight[],
+  reportInsights: ReviewedInsight[],
   segmentById: Map<string, Segment>
 ) {
-  if (!result || !approvedInsights.length) return "";
+  if (!result || !reportInsights.length) return "";
 
-  const typeSummary = Array.from(new Set(approvedInsights.map((insight) => insight.type)))
-    .map((type) => `- ${type}: ${approvedInsights.filter((insight) => insight.type === type).length}개`)
+  const typeSummary = Array.from(new Set(reportInsights.map((insight) => insight.type)))
+    .map((type) => `- ${type}: ${reportInsights.filter((insight) => insight.type === type).length}개`)
     .join("\n");
 
-  const findingSections = approvedInsights
+  const findingSections = reportInsights
     .map((insight, index) => {
       const evidence = getEvidenceSegmentIds(insight)
         .slice(0, 3)
@@ -2435,7 +2489,7 @@ ${evidence || "  - 연결된 근거 발화가 없습니다."}`;
     })
     .join("\n\n");
 
-  const appendixEvidence = approvedInsights
+  const appendixEvidence = reportInsights
     .flatMap((insight) => getEvidenceSegmentIds(insight))
     .filter((segmentId, index, segmentIds) => segmentIds.indexOf(segmentId) === index)
     .map((segmentId) => segmentById.get(segmentId))
@@ -2446,7 +2500,7 @@ ${evidence || "  - 연결된 근거 발화가 없습니다."}`;
   return `# ${projectName} UX 리서치 보고서 초안
 
 ## Executive Summary
-이번 분석에서는 ${approvedInsights.length}개의 핵심 인사이트를 승인했습니다.
+이번 분석에서는 ${reportInsights.length}개의 핵심 인사이트가 자동으로 반영되었습니다.
 
 ## 조사 배경
 - 프로젝트명: ${projectName}
@@ -2465,10 +2519,10 @@ ${findingSections}
 ${typeSummary || "- 추가 검토가 필요합니다."}
 
 ## 개선 제안
-${approvedInsights.map((insight, index) => `${index + 1}. ${insight.recommendation}`).join("\n")}
+${reportInsights.map((insight, index) => `${index + 1}. ${insight.recommendation}`).join("\n")}
 
 ## Appendix
-${appendixEvidence || "- 승인된 인사이트에 연결된 근거 발화가 없습니다."}
+${appendixEvidence || "- 반영된 인사이트에 연결된 근거 발화가 없습니다."}
 `;
 }
 
