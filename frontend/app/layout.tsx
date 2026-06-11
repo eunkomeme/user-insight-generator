@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "인사이트 엔진",
-  description: "사내용 UX 리서치 인사이트 워크벤치"
+  title: "CXI Studio",
+  description: "CXI Studio - 사내용 UX 리서치 인사이트 워크벤치"
 };
 
 export default function RootLayout({

@@ -9,14 +9,19 @@ import {
   ChevronDown,
   CircleSlash,
   ClipboardCheck,
+  Database,
   Download,
   FileText,
   FileUp,
+  FolderOpen,
+  FolderPlus,
   Layers3,
   Loader2,
   MessageSquareText,
   Network,
   Sparkles,
+  TableProperties,
+  Trash2,
   Wand2
 } from "lucide-react";
 
@@ -31,15 +36,19 @@ import type {
   AnalysisResponse,
   DraftState,
   Insight,
+  ProjectSummary,
   RecognitionResponse,
   ReviewedInsight,
   ReviewStatus,
   Segment,
+  SourceRecord,
+  TabularPreviewResponse,
   Topic,
 } from "../lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const DRAFT_STORAGE_KEY = "ux-research-workbench:draft:v1";
+const DRAFT_STORAGE_KEY = "cxi-studio:draft:v1";
+type WorkspaceTab = "evidence" | "insights" | "synthesis" | "report";
 
 const sampleText = `# SmartThings 요리 경험 인터뷰
 P1: 오븐 예열할 때는 앱을 쓰지만 실제로 켜졌는지 확인하기 전까지는 불안해요.
@@ -48,11 +57,11 @@ P3: 자동 조리는 좋아 보이지만 재료 양이나 냉동 상태가 다�
 P5: 앱에서 가능한 것과 직접 해야 하는 것이 기기마다 달라서 헷갈려요.`;
 
 const steps = [
-  { id: "input", label: "자료 추가", description: "파일 또는 텍스트" },
-  { id: "recognize", label: "자료 인식", description: "화자와 섹션 확인" },
-  { id: "analyze", label: "AI 분석", description: "인사이트 후보 생성" },
-  { id: "review", label: "인사이트 검수", description: "승인/수정/제외" },
-  { id: "report", label: "보고서 초안", description: "승인 항목 반영" }
+  { id: "input", label: "소스 추가", description: "파일 먼저 등록" },
+  { id: "recognize", label: "자동 인식", description: "유형과 세그먼트 확인" },
+  { id: "analyze", label: "개별 분석", description: "소스별 인사이트" },
+  { id: "review", label: "검수", description: "승인/수정/제외" },
+  { id: "report", label: "보고서", description: "승인 항목 반영" }
 ] as const;
 
 const analysisStages = [
@@ -65,7 +74,13 @@ const analysisStages = [
 ];
 
 export default function Home() {
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [activeProjectSlug, setActiveProjectSlug] = useState("");
+  const [projectLoading, setProjectLoading] = useState(false);
+  const [projectMessage, setProjectMessage] = useState("");
   const [projectName, setProjectName] = useState("SmartThings 요리 경험 인터뷰");
+  const [sources, setSources] = useState<SourceRecord[]>([]);
+  const [selectedSourceId, setSelectedSourceId] = useState("");
   const [sourceName, setSourceName] = useState("interview.md");
   const [text, setText] = useState(sampleText);
   const [inputMode, setInputMode] = useState<"file" | "text">("file");
@@ -73,6 +88,9 @@ export default function Home() {
   const [tasksText, setTasksText] = useState("오븐 예열 상태 확인\n요리 중 앱 조작\n자동 조리 설정 신뢰 판단");
   const [evaluationCriteriaText, setEvaluationCriteriaText] = useState("신뢰 형성/저해 요인\n조작 맥락의 마찰\n기능 기대와 실제 사용 조건의 간극");
   const [file, setFile] = useState<File | null>(null);
+  const [tabularPreview, setTabularPreview] = useState<TabularPreviewResponse | null>(null);
+  const [columnMappings, setColumnMappings] = useState<Record<string, string>>({});
+  const [previewingTabular, setPreviewingTabular] = useState(false);
   const [recognition, setRecognition] = useState<RecognitionResponse | null>(null);
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [reviewedInsights, setReviewedInsights] = useState<ReviewedInsight[]>([]);
@@ -82,9 +100,19 @@ export default function Home() {
   const [recognizing, setRecognizing] = useState(false);
   const [error, setError] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("evidence");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const recognitionResultRef = useRef<HTMLDivElement | null>(null);
   const draftRestoredRef = useRef(false);
   const suppressNextSaveRef = useRef(false);
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  useEffect(() => {
+    loadSources(activeProjectSlug);
+  }, [activeProjectSlug]);
 
   const segmentById = useMemo(() => {
     const map = new Map<string, Segment>();
@@ -105,6 +133,152 @@ export default function Home() {
     [projectName, recognition, result, approvedInsights, segmentById]
   );
 
+  async function loadProjects() {
+    try {
+      const response = await fetch(`${API_BASE}/api/projects`);
+      if (!response.ok) return;
+      const data = await response.json();
+      setProjects(Array.isArray(data.projects) ? data.projects : []);
+    } catch {
+      setProjects([]);
+    }
+  }
+
+  async function loadSources(projectSlug = activeProjectSlug) {
+    if (!projectSlug) {
+      setSources([]);
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectSlug)}/sources`);
+      if (!response.ok) return;
+      const data = await response.json();
+      setSources(Array.isArray(data.sources) ? data.sources : []);
+    } catch {
+      setSources([]);
+    }
+  }
+
+  async function ensureActiveProject() {
+    if (activeProjectSlug) return activeProjectSlug;
+    const nextName = projectName.trim() || "새 리서치 프로젝트";
+    const response = await fetch(`${API_BASE}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_name: nextName,
+        research_goal: researchGoal,
+        participant_count: recognition?.participant_count ?? 0,
+        tasks: splitTextareaLines(tasksText),
+        evaluation_criteria: splitTextareaLines(evaluationCriteriaText)
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail ?? "프로젝트를 만들지 못했습니다.");
+    }
+    const created = normalizeProject(data.project);
+    setActiveProjectSlug(created.slug);
+    setProjectName(created.project_name || created.name);
+    await loadProjects();
+    return created.slug;
+  }
+
+  async function createCurrentProject() {
+    const nextName = projectName.trim();
+    if (!nextName) {
+      setProjectMessage("프로젝트명을 먼저 입력하세요.");
+      return;
+    }
+    setProjectLoading(true);
+    setProjectMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_name: nextName,
+          research_goal: researchGoal,
+          participant_count: recognition?.participant_count ?? 0,
+          tasks: splitTextareaLines(tasksText),
+          evaluation_criteria: splitTextareaLines(evaluationCriteriaText)
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ?? "프로젝트를 만들지 못했습니다.");
+      }
+      const created = normalizeProject(data.project);
+      setActiveProjectSlug(created.slug);
+      setProjectMessage("프로젝트를 만들었습니다.");
+      await loadProjects();
+      await loadSources(created.slug);
+    } catch (requestError) {
+      setProjectMessage(requestError instanceof Error ? requestError.message : "프로젝트 생성 중 오류가 발생했습니다.");
+    } finally {
+      setProjectLoading(false);
+    }
+  }
+
+  async function selectProject(project: ProjectSummary) {
+    const slug = project.slug;
+    if (!slug) return;
+    setProjectLoading(true);
+    setProjectMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(slug)}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ?? "프로젝트를 불러오지 못했습니다.");
+      }
+      const selected = normalizeProject(data.project);
+      setActiveProjectSlug(selected.slug);
+      setProjectName(selected.project_name || selected.name);
+      setResearchGoal(selected.research_goal ?? "");
+      setTasksText((selected.tasks ?? []).join("\n"));
+      setEvaluationCriteriaText((selected.evaluation_criteria ?? []).join("\n"));
+      setRecognition(null);
+      setResult(null);
+      setReviewedInsights([]);
+      setSegmentTopicOverrides({});
+      await loadSources(selected.slug);
+      setWorkspaceTab("evidence");
+      setProjectMessage("프로젝트를 불러왔습니다.");
+    } catch (requestError) {
+      setProjectMessage(requestError instanceof Error ? requestError.message : "프로젝트 선택 중 오류가 발생했습니다.");
+    } finally {
+      setProjectLoading(false);
+    }
+  }
+
+  async function removeProject(project: ProjectSummary) {
+    if (!project.slug) return;
+    const ok = window.confirm(`"${project.name}" 프로젝트를 삭제할까요? 저장된 분석 세션도 함께 삭제됩니다.`);
+    if (!ok) return;
+    setProjectLoading(true);
+    setProjectMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(project.slug)}`, {
+        method: "DELETE"
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ?? "프로젝트를 삭제하지 못했습니다.");
+      }
+      if (activeProjectSlug === project.slug) {
+        setActiveProjectSlug("");
+        setSources([]);
+        setSelectedSourceId("");
+      }
+      setProjectMessage("프로젝트를 삭제했습니다.");
+      await loadProjects();
+    } catch (requestError) {
+      setProjectMessage(requestError instanceof Error ? requestError.message : "프로젝트 삭제 중 오류가 발생했습니다.");
+    } finally {
+      setProjectLoading(false);
+    }
+  }
+
   useEffect(() => {
     try {
       const rawDraft = window.localStorage.getItem(DRAFT_STORAGE_KEY);
@@ -113,6 +287,7 @@ export default function Home() {
         return;
       }
       const draft = JSON.parse(rawDraft) as Partial<DraftState>;
+      if (typeof draft.activeProjectSlug === "string") setActiveProjectSlug(draft.activeProjectSlug);
       if (draft.projectName) setProjectName(draft.projectName);
       if (draft.sourceName) setSourceName(draft.sourceName);
       if (typeof draft.text === "string") setText(draft.text);
@@ -140,6 +315,7 @@ export default function Home() {
     }
     const savedAt = new Date().toISOString();
     const draft: DraftState = {
+      activeProjectSlug,
       projectName,
       sourceName,
       text,
@@ -159,7 +335,7 @@ export default function Home() {
     } catch {
       setError("브라우저 임시 저장 공간이 부족합니다. 보고서 Markdown을 다운로드하거나 임시 저장을 삭제해주세요.");
     }
-  }, [evaluationCriteriaText, inputMode, projectName, recognition, researchGoal, result, reviewedInsights, segmentTopicOverrides, sourceName, tasksText, text]);
+  }, [activeProjectSlug, evaluationCriteriaText, inputMode, projectName, recognition, researchGoal, result, reviewedInsights, segmentTopicOverrides, sourceName, tasksText, text]);
 
   async function recognize(selectedFile = file) {
     setRecognizing(true);
@@ -175,10 +351,15 @@ export default function Home() {
         throw new Error(data.detail ?? "자료 인식에 실패했습니다.");
       }
       setRecognition(data);
+      setWorkspaceTab("evidence");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "자료 인식 중 오류가 발생했습니다.");
     } finally {
       setRecognizing(false);
+      // 인식 결과 영역으로 자동 스크롤
+      setTimeout(() => {
+        recognitionResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
     }
   }
 
@@ -205,6 +386,7 @@ export default function Home() {
           reviewStatus: "수정 필요"
         }))
       );
+      setWorkspaceTab("insights");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "분석 중 오류가 발생했습니다.");
     } finally {
@@ -214,10 +396,13 @@ export default function Home() {
   }
 
   function recognizeText() {
+    // 확장자가 없으면 .md로 보정 (백엔드 파서가 포맷을 확장자로 감지하기 때문)
+    const hasExt = /\.(txt|md|markdown|csv|xlsx)$/i.test(sourceName);
+    const safeName = hasExt ? sourceName : sourceName ? `${sourceName}.md` : "붙여넣은 인터뷰.md";
     return fetch(`${API_BASE}/api/parse`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source_name: sourceName, text })
+      body: JSON.stringify({ source_name: safeName, text })
     });
   }
 
@@ -225,6 +410,126 @@ export default function Home() {
     const formData = new FormData();
     formData.append("file", uploadFile);
     return fetch(`${API_BASE}/api/parse-upload`, { method: "POST", body: formData });
+  }
+
+  async function previewTabularFile(uploadFile: File) {
+    if (!isTabularFile(uploadFile.name)) {
+      setTabularPreview(null);
+      setColumnMappings({});
+      return;
+    }
+    setPreviewingTabular(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadFile);
+      const response = await fetch(`${API_BASE}/api/preview-tabular`, { method: "POST", body: formData });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ?? "표 데이터 미리보기에 실패했습니다.");
+      }
+      setTabularPreview(data);
+      setColumnMappings(
+        Object.fromEntries(
+          data.columns.map((column: { source_column: string; suggested_field: string }) => [column.source_column, column.suggested_field])
+        )
+      );
+    } catch (requestError) {
+      setTabularPreview(null);
+      setColumnMappings({});
+      setError(requestError instanceof Error ? requestError.message : "표 데이터 미리보기 중 오류가 발생했습니다.");
+    } finally {
+      setPreviewingTabular(false);
+    }
+  }
+
+  async function uploadSourceToLibrary(uploadFile: File) {
+    setProjectLoading(true);
+    setProjectMessage("");
+    try {
+      const projectSlug = await ensureActiveProject();
+      const formData = new FormData();
+      formData.append("file", uploadFile);
+      const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectSlug)}/sources`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ?? "소스를 저장하지 못했습니다.");
+      }
+      setSources((current) => [data.source, ...current.filter((source) => source.id !== data.source.id)]);
+      setSelectedSourceId(data.source.id);
+      setRecognition(data.recognition ?? null);
+      setProjectMessage("소스 라이브러리에 추가했습니다.");
+    } catch (requestError) {
+      setProjectMessage(requestError instanceof Error ? requestError.message : "소스 저장 중 오류가 발생했습니다.");
+    } finally {
+      setProjectLoading(false);
+    }
+  }
+
+  async function deleteLibrarySource(source: SourceRecord) {
+    if (!activeProjectSlug) return;
+    const ok = window.confirm(`"${source.name}" 소스를 삭제할까요?`);
+    if (!ok) return;
+    setProjectLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(activeProjectSlug)}/sources/${encodeURIComponent(source.id)}`, {
+        method: "DELETE"
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ?? "소스를 삭제하지 못했습니다.");
+      }
+      setSources((current) => current.filter((item) => item.id !== source.id));
+      if (selectedSourceId === source.id) setSelectedSourceId("");
+      setProjectMessage("소스를 삭제했습니다.");
+    } catch (requestError) {
+      setProjectMessage(requestError instanceof Error ? requestError.message : "소스 삭제 중 오류가 발생했습니다.");
+    } finally {
+      setProjectLoading(false);
+    }
+  }
+
+  async function analyzeLibrarySource(source: SourceRecord) {
+    if (!activeProjectSlug) return;
+    setLoading(true);
+    setAnalysisStageIndex(0);
+    setError("");
+    setSelectedSourceId(source.id);
+    setSources((current) => current.map((item) => (item.id === source.id ? { ...item, status: "분석중" } : item)));
+    const stageTimer = window.setInterval(() => {
+      setAnalysisStageIndex((current) => Math.min(current + 1, analysisStages.length - 1));
+    }, 2500);
+    try {
+      const formData = new FormData();
+      formData.append("research_goal", researchGoal);
+      formData.append("tasks", tasksText);
+      formData.append("evaluation_criteria", evaluationCriteriaText);
+      const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(activeProjectSlug)}/sources/${encodeURIComponent(source.id)}/analyze`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(formatErrorMessage(data.detail ?? "소스 분석에 실패했습니다."));
+      }
+      setResult(data);
+      setReviewedInsights(
+        data.analysis.insights.map((insight: Insight) => ({
+          ...insight,
+          reviewStatus: "수정 필요"
+        }))
+      );
+      setSources((current) => current.map((item) => (item.id === source.id ? data.source : item)));
+      setWorkspaceTab("insights");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "소스 분석 중 오류가 발생했습니다.");
+      setSources((current) => current.map((item) => (item.id === source.id ? { ...item, status: "오류" } : item)));
+    } finally {
+      window.clearInterval(stageTimer);
+      setLoading(false);
+    }
   }
 
   function analyzeText() {
@@ -254,6 +559,8 @@ export default function Home() {
 
   function handleFileChange(selectedFile: File | null) {
     setFile(selectedFile);
+    setTabularPreview(null);
+    setColumnMappings({});
     setRecognition(null);
     setResult(null);
     setReviewedInsights([]);
@@ -261,6 +568,8 @@ export default function Home() {
     setError("");
     if (selectedFile) {
       setSourceName(selectedFile.name);
+      void previewTabularFile(selectedFile);
+      void uploadSourceToLibrary(selectedFile);
       recognize(selectedFile);
     }
   }
@@ -271,6 +580,8 @@ export default function Home() {
     setResult(null);
     setReviewedInsights([]);
     setSegmentTopicOverrides({});
+    setTabularPreview(null);
+    setColumnMappings({});
     setError("");
   }
 
@@ -283,6 +594,7 @@ export default function Home() {
   function clearDraft() {
     window.localStorage.removeItem(DRAFT_STORAGE_KEY);
     suppressNextSaveRef.current = true;
+    setActiveProjectSlug("");
     setProjectName("SmartThings 요리 경험 인터뷰");
     setSourceName("interview.md");
     setText(sampleText);
@@ -291,22 +603,32 @@ export default function Home() {
     setTasksText("오븐 예열 상태 확인\n요리 중 앱 조작\n자동 조리 설정 신뢰 판단");
     setEvaluationCriteriaText("신뢰 형성/저해 요인\n조작 맥락의 마찰\n기능 기대와 실제 사용 조건의 간극");
     setFile(null);
+    setTabularPreview(null);
+    setColumnMappings({});
     setRecognition(null);
     setResult(null);
     setReviewedInsights([]);
     setSegmentTopicOverrides({});
     setError("");
     setLastSavedAt("");
+    setWorkspaceTab("evidence");
   }
 
   return (
-    <main className="min-h-screen text-slate-950">
+    <main className="min-h-screen text-[#141413]">
       <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col lg:flex-row">
         <Sidebar
           activeStep={activeStep}
+          activeProjectSlug={activeProjectSlug}
           approvedCount={approvedInsights.length}
+          onCreateProject={createCurrentProject}
+          onDeleteProject={removeProject}
+          onSelectProject={selectProject}
+          projectLoading={projectLoading}
+          projectMessage={projectMessage}
           needsReviewCount={needsReviewCount}
           projectName={projectName}
+          projects={projects}
         />
 
         <section className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
@@ -319,36 +641,71 @@ export default function Home() {
             recognition={recognition}
             result={result}
           />
+          <WorkspaceNav
+            activeTab={workspaceTab}
+            approvedCount={approvedInsights.length}
+            canOpenInsights={Boolean(result)}
+            canOpenReport={Boolean(result)}
+            canOpenSynthesis={sources.filter((source) => source.status === "분석완료").length >= 2}
+            onChange={setWorkspaceTab}
+            recognitionReady={Boolean(recognition)}
+            reviewCount={needsReviewCount}
+            sourceCount={sources.length}
+          />
 
           <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
             <div className="grid min-w-0 gap-5">
-              <InputPanel
-                canRecognize={canRecognize}
-                file={file}
-                fileInputRef={fileInputRef}
-                inputMode={inputMode}
-                onFileChange={handleFileChange}
-                onModeChange={changeInputMode}
-                onRecognize={() => recognize()}
-                projectName={projectName}
-                researchGoal={researchGoal}
-                recognizing={recognizing}
-                setEvaluationCriteriaText={setEvaluationCriteriaText}
-                setProjectName={setProjectName}
-                setResearchGoal={setResearchGoal}
-                setSourceName={setSourceName}
-                setTasksText={setTasksText}
-                setText={setText}
-                sourceName={sourceName}
-                tasksText={tasksText}
-                text={text}
-                evaluationCriteriaText={evaluationCriteriaText}
-              />
-
               <AnimatePresence mode="popLayout">
-                {recognition ? (
-                  <MotionBlock key="recognition">
-                    <RecognitionPanel recognition={recognition} />
+                {workspaceTab === "evidence" ? (
+                  <MotionBlock key="evidence">
+                    <div className="grid gap-5">
+                      <InputPanel
+                        canRecognize={canRecognize}
+                        columnMappings={columnMappings}
+                        file={file}
+                        fileInputRef={fileInputRef}
+                        inputMode={inputMode}
+                        onFileChange={handleFileChange}
+                        onMappingChange={(column, field) =>
+                          setColumnMappings((current) => ({
+                            ...current,
+                            [column]: field
+                          }))
+                        }
+                        onModeChange={changeInputMode}
+                        onRecognize={() => recognize()}
+                        previewingTabular={previewingTabular}
+                        projectName={projectName}
+                        researchGoal={researchGoal}
+                        recognizing={recognizing}
+                        setEvaluationCriteriaText={setEvaluationCriteriaText}
+                        setProjectName={setProjectName}
+                        setResearchGoal={setResearchGoal}
+                        setSourceName={setSourceName}
+                        setTasksText={setTasksText}
+                        setText={setText}
+                        sourceName={sourceName}
+                        tabularPreview={tabularPreview}
+                        tasksText={tasksText}
+                        text={text}
+                        evaluationCriteriaText={evaluationCriteriaText}
+                      />
+                      <SourceLibraryPanel
+                        activeSourceId={selectedSourceId}
+                        analysisStage={analysisStages[analysisStageIndex]}
+                        loading={loading}
+                        onAnalyzeSource={analyzeLibrarySource}
+                        onDeleteSource={deleteLibrarySource}
+                        onSelectSource={setSelectedSourceId}
+                        sources={sources}
+                      />
+                      <div ref={recognitionResultRef}>
+                        {recognition ? <RecognitionPanel recognition={recognition} /> : null}
+                        {!result ? (
+                          <EmptyAnalysisState analysisStage={analysisStages[analysisStageIndex]} canAnalyze={canAnalyze} loading={loading} onAnalyze={analyze} />
+                        ) : null}
+                      </div>
+                    </div>
                   </MotionBlock>
                 ) : null}
 
@@ -360,8 +717,9 @@ export default function Home() {
                   </MotionBlock>
                 ) : null}
 
-                {result ? (
-                  <MotionBlock key="results">
+                {workspaceTab === "insights" ? (
+                  <MotionBlock key="insights">
+                    {result ? (
 	                    <AnalysisWorkspace
 	                      approvedInsights={approvedInsights}
 	                      needsReviewCount={needsReviewCount}
@@ -377,14 +735,13 @@ export default function Home() {
 	                      segmentById={segmentById}
 	                      segmentTopicOverrides={segmentTopicOverrides}
 	                    />
+                    ) : (
+                      <EmptyAnalysisState analysisStage={analysisStages[analysisStageIndex]} canAnalyze={canAnalyze} loading={loading} onAnalyze={analyze} />
+                    )}
                   </MotionBlock>
-                ) : (
-                  <MotionBlock key="empty">
-                    <EmptyAnalysisState analysisStage={analysisStages[analysisStageIndex]} canAnalyze={canAnalyze} loading={loading} onAnalyze={analyze} />
-                  </MotionBlock>
-                )}
+                ) : null}
 
-                {result ? (
+                {workspaceTab === "report" && result ? (
                   <MotionBlock key="report">
                     <ReportPanel
                       approvedInsights={approvedInsights}
@@ -393,6 +750,12 @@ export default function Home() {
                       reportMarkdown={reportMarkdown}
                       result={result}
                     />
+                  </MotionBlock>
+                ) : null}
+
+                {workspaceTab === "synthesis" ? (
+                  <MotionBlock key="synthesis">
+                    <SynthesisPlaceholder sources={sources} />
                   </MotionBlock>
                 ) : null}
               </AnimatePresence>
@@ -411,35 +774,57 @@ export default function Home() {
 
 function Sidebar({
   activeStep,
+  activeProjectSlug,
   approvedCount,
+  onCreateProject,
+  onDeleteProject,
+  onSelectProject,
+  projectLoading,
+  projectMessage,
   needsReviewCount,
-  projectName
+  projectName,
+  projects
 }: {
   activeStep: string;
+  activeProjectSlug: string;
   approvedCount: number;
+  onCreateProject: () => void;
+  onDeleteProject: (project: ProjectSummary) => void;
+  onSelectProject: (project: ProjectSummary) => void;
+  projectLoading: boolean;
+  projectMessage: string;
   needsReviewCount: number;
   projectName: string;
+  projects: ProjectSummary[];
 }) {
   return (
-    <aside className="border-b border-slate-200 bg-white/80 px-5 py-5 backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-80 lg:border-b-0 lg:border-r lg:px-6 lg:py-8">
+    <aside className="border-b border-[#e6dfd8] bg-[#faf9f5]/85 px-5 py-5 backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-80 lg:border-b-0 lg:border-r lg:px-6 lg:py-8">
       <div className="flex items-start justify-between gap-4 lg:block">
         <div>
           <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm">
-              <Wand2 size={18} />
-            </div>
             <div>
-              <h1 className="text-xl font-black tracking-tight">인사이트 엔진</h1>
-              <p className="text-xs font-semibold text-slate-500">UX Research Workbench</p>
+              <h1 className="font-serif text-2xl font-normal leading-tight">CXI Studio</h1>
+              <p className="text-xs font-semibold text-[#6c6a64]">Customer Experience Intelligence</p>
             </div>
           </div>
-          <div className="mt-6 hidden rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:block">
-            <p className="text-xs font-bold text-slate-500">현재 프로젝트</p>
-            <p className="mt-2 line-clamp-2 text-sm font-semibold leading-6 text-slate-900">{projectName}</p>
+          <ColorChips className="mt-5" />
+          <div className="mt-6 hidden rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4 lg:block">
+            <p className="text-xs font-bold text-[#6c6a64]">현재 프로젝트</p>
+            <p className="mt-2 line-clamp-2 text-sm font-semibold leading-6 text-[#252523]">{projectName}</p>
           </div>
         </div>
         <Badge variant={approvedCount ? "green" : "muted"}>{approvedCount ? `승인 ${approvedCount}` : "초안"}</Badge>
       </div>
+
+      <ProjectSwitcher
+        activeProjectSlug={activeProjectSlug}
+        loading={projectLoading}
+        message={projectMessage}
+        onCreateProject={onCreateProject}
+        onDeleteProject={onDeleteProject}
+        onSelectProject={onSelectProject}
+        projects={projects}
+      />
 
       <nav className="mt-6 grid gap-2">
         {steps.map((step, index) => {
@@ -448,14 +833,14 @@ function Sidebar({
             <div
               className={cn(
                 "flex items-center gap-3 rounded-2xl border px-3 py-3 transition",
-                isActive ? "border-slate-300 bg-white shadow-sm" : "border-transparent text-slate-500"
+                isActive ? "border-[#e6dfd8] bg-[#faf9f5] shadow-sm" : "border-transparent text-[#6c6a64]"
               )}
               key={step.id}
             >
               <span
                 className={cn(
                   "flex h-7 w-7 items-center justify-center rounded-full text-xs font-black",
-                  isActive ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-500"
+                  isActive ? "bg-[#141413] text-[#faf9f5]" : "bg-[#efe9de] text-[#6c6a64]"
                 )}
               >
                 {index + 1}
@@ -469,11 +854,199 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="mt-8 hidden border-t border-slate-200 pt-5 text-sm text-slate-500 lg:block">
+      <div className="mt-8 hidden border-t border-[#e6dfd8] pt-5 text-sm text-[#6c6a64] lg:block">
         <p>인사이트는 먼저 검수하고, 승인된 항목만 보고서에 반영됩니다.</p>
-        {needsReviewCount ? <p className="mt-3 font-semibold text-amber-700">검수 대기 {needsReviewCount}개</p> : null}
+        {needsReviewCount ? <p className="mt-3 font-semibold text-[#a9583e]">검수 대기 {needsReviewCount}개</p> : null}
       </div>
     </aside>
+  );
+}
+
+function ProjectSwitcher({
+  activeProjectSlug,
+  loading,
+  message,
+  onCreateProject,
+  onDeleteProject,
+  onSelectProject,
+  projects
+}: {
+  activeProjectSlug: string;
+  loading: boolean;
+  message: string;
+  onCreateProject: () => void;
+  onDeleteProject: (project: ProjectSummary) => void;
+  onSelectProject: (project: ProjectSummary) => void;
+  projects: ProjectSummary[];
+}) {
+  return (
+    <section className="mt-6 rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase text-[#6c6a64]">Projects</p>
+          <p className="mt-1 text-sm font-bold text-[#252523]">프로젝트 관리</p>
+        </div>
+        <button
+          className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#141413] text-[#faf9f5] transition hover:bg-[#252320] disabled:opacity-50"
+          disabled={loading}
+          onClick={onCreateProject}
+          title="현재 입력값으로 새 프로젝트 만들기"
+          type="button"
+        >
+          {loading ? <Loader2 className="animate-spin" size={16} /> : <FolderPlus size={16} />}
+        </button>
+      </div>
+
+      <div className="mt-3 grid max-h-56 gap-2 overflow-y-auto pr-1">
+        {projects.length ? (
+          projects.map((project) => {
+            const isActive = project.slug === activeProjectSlug;
+            return (
+              <div
+                className={cn(
+                  "group flex items-center gap-2 rounded-xl border p-2 transition",
+                  isActive ? "border-[#cc785c] bg-[#faf9f5]" : "border-transparent bg-[#efe9de] hover:bg-[#faf9f5]"
+                )}
+                key={project.slug}
+              >
+                <button
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  disabled={loading}
+                  onClick={() => onSelectProject(project)}
+                  type="button"
+                >
+                  <FolderOpen className="shrink-0 text-[#a9583e]" size={16} />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-bold text-[#252523]">{project.name}</span>
+                    <span className="block truncate text-xs text-[#8e8b82]">{project.updated_at ? formatSavedTime(project.updated_at) : "저장됨"}</span>
+                  </span>
+                </button>
+                <button
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8e3c29] opacity-70 transition hover:bg-[#f2d8ce] hover:opacity-100"
+                  disabled={loading}
+                  onClick={() => onDeleteProject(project)}
+                  title="프로젝트 삭제"
+                  type="button"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            );
+          })
+        ) : (
+          <div className="rounded-xl bg-[#efe9de] p-3 text-sm leading-6 text-[#6c6a64]">
+            아직 저장된 프로젝트가 없습니다. 현재 입력값으로 첫 프로젝트를 만들 수 있습니다.
+          </div>
+        )}
+      </div>
+
+      {message ? <p className="mt-3 rounded-xl bg-[#faf9f5] px-3 py-2 text-xs font-semibold text-[#6c6a64]">{message}</p> : null}
+    </section>
+  );
+}
+
+function WorkspaceNav({
+  activeTab,
+  approvedCount,
+  canOpenInsights,
+  canOpenReport,
+  canOpenSynthesis,
+  onChange,
+  recognitionReady,
+  reviewCount,
+  sourceCount
+}: {
+  activeTab: WorkspaceTab;
+  approvedCount: number;
+  canOpenInsights: boolean;
+  canOpenReport: boolean;
+  canOpenSynthesis: boolean;
+  onChange: (tab: WorkspaceTab) => void;
+  recognitionReady: boolean;
+  reviewCount: number;
+  sourceCount: number;
+}) {
+  const tabs: {
+    id: WorkspaceTab;
+    label: string;
+    description: string;
+    disabled?: boolean;
+    count?: string;
+  }[] = [
+    {
+      id: "evidence",
+      label: "소스",
+      description: sourceCount ? `${sourceCount}개 소스 관리` : recognitionReady ? "원자료 인식 완료" : "파일을 먼저 추가",
+    },
+    {
+      id: "insights",
+      label: "개별 분석",
+      description: canOpenInsights ? "선택 소스의 인사이트" : "소스 분석 후 활성화",
+      disabled: !canOpenInsights,
+      count: canOpenInsights ? `${reviewCount} 대기` : undefined,
+    },
+    {
+      id: "synthesis",
+      label: "종합",
+      description: canOpenSynthesis ? "소스 간 패턴 연결" : "분석 완료 소스 2개 필요",
+      disabled: !canOpenSynthesis,
+      count: canOpenSynthesis ? "준비됨" : undefined,
+    },
+    {
+      id: "report",
+      label: "보고서",
+      description: canOpenReport ? "승인/종합 결과로 구성" : "분석 후 활성화",
+      disabled: !canOpenReport,
+      count: canOpenReport ? `${approvedCount} 승인` : undefined,
+    },
+  ];
+
+  return (
+    <div className="mt-5 rounded-2xl border border-[#e6dfd8] bg-[#faf9f5]/85 p-1.5 shadow-sm shadow-[#e6dfd8]/30">
+      <div className="grid gap-1.5 md:grid-cols-4">
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              className={cn(
+                "flex min-h-16 items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition",
+                isActive ? "bg-[#141413] text-[#faf9f5] shadow-sm" : "text-[#6c6a64] hover:bg-[#f5f0e8]",
+                tab.disabled && "cursor-not-allowed opacity-45 hover:bg-transparent"
+              )}
+              disabled={tab.disabled}
+              key={tab.id}
+              onClick={() => onChange(tab.id)}
+              type="button"
+            >
+              <span>
+                <span className="block text-sm font-black">{tab.label}</span>
+                <span className={cn("mt-1 block text-xs", isActive ? "text-[#a09d96]" : "text-[#8e8b82]")}>{tab.description}</span>
+              </span>
+              {tab.count ? (
+                <span className={cn("rounded-full px-2.5 py-1 text-xs font-bold", isActive ? "bg-[#252320] text-[#faf9f5]" : "bg-[#efe9de] text-[#6c6a64]")}>
+                  {tab.count}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ColorChips({ className }: { className?: string }) {
+  const chips = ["#141413", "#cc785c", "#e8a55a", "#5db8a6", "#252320", "#e8e0d2"];
+  return (
+    <div className={cn("flex items-center gap-2", className)} aria-hidden="true">
+      {chips.map((color, index) => (
+        <span
+          className="h-5 w-10 rounded-full border border-black/10 shadow-sm"
+          key={color}
+          style={{ backgroundColor: color, transform: `translateY(${index % 2 ? 2 : 0}px)` }}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -500,18 +1073,19 @@ function WorkbenchHeader({
       ? "자료 구조가 확인되었습니다. 이제 AI 분석을 실행할 수 있습니다."
       : "리서치 원자료를 추가하면 화자와 섹션을 먼저 인식합니다.";
   return (
-    <header className="rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm shadow-slate-200/60 backdrop-blur sm:p-6">
+    <header className="rounded-3xl border border-[#e6dfd8] bg-[#faf9f5]/90 p-5 shadow-sm shadow-[#e6dfd8]/50 backdrop-blur sm:p-6">
       <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="blue">사내용 워크벤치</Badge>
+            <Badge variant="amber">CXI Studio</Badge>
+            <Badge variant="blue">리서치 워크벤치</Badge>
             <Badge variant={result ? "green" : recognition ? "amber" : "muted"}>
               {result ? "분석 완료" : recognition ? "자료 인식 완료" : "자료 대기"}
             </Badge>
             <Badge variant="muted">{lastSavedAt ? `자동 저장 ${formatSavedTime(lastSavedAt)}` : "자동 저장 준비"}</Badge>
           </div>
-          <h2 className="mt-4 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">리서치 원자료를 실무 보고서로 정리합니다</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{helper}</p>
+          <h2 className="mt-4 text-xl font-semibold leading-8 text-[#141413] sm:text-2xl">리서치 원자료를 근거 있는 CX 인사이트로 정리합니다</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6c6a64]">{helper}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={onClearDraft} variant="ghost">
@@ -521,9 +1095,9 @@ function WorkbenchHeader({
             <Download size={18} />
             보고서 다운로드
           </Button>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-xs font-bold text-slate-500">승인된 인사이트</p>
-            <p className="mt-1 text-2xl font-black text-slate-950">{approvedCount}</p>
+          <div className="rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] px-4 py-3">
+            <p className="text-xs font-bold text-[#6c6a64]">승인된 인사이트</p>
+            <p className="mt-1 text-2xl font-black text-[#141413]">{approvedCount}</p>
           </div>
         </div>
       </div>
@@ -533,13 +1107,16 @@ function WorkbenchHeader({
 
 function InputPanel({
   canRecognize,
+  columnMappings,
   evaluationCriteriaText,
   file,
   fileInputRef,
   inputMode,
   onFileChange,
+  onMappingChange,
   onModeChange,
   onRecognize,
+  previewingTabular,
   projectName,
   researchGoal,
   recognizing,
@@ -550,17 +1127,21 @@ function InputPanel({
   setTasksText,
   setText,
   sourceName,
+  tabularPreview,
   tasksText,
   text
 }: {
   canRecognize: boolean;
+  columnMappings: Record<string, string>;
   evaluationCriteriaText: string;
   file: File | null;
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
   inputMode: "file" | "text";
   onFileChange: (file: File | null) => void;
+  onMappingChange: (column: string, field: string) => void;
   onModeChange: (mode: "file" | "text") => void;
   onRecognize: () => void;
+  previewingTabular: boolean;
   projectName: string;
   researchGoal: string;
   recognizing: boolean;
@@ -571,6 +1152,7 @@ function InputPanel({
   setTasksText: (value: string) => void;
   setText: (value: string) => void;
   sourceName: string;
+  tabularPreview: TabularPreviewResponse | null;
   tasksText: string;
   text: string;
 }) {
@@ -580,7 +1162,7 @@ function InputPanel({
         <div>
           <SectionKicker icon={<FileUp size={16} />} label="1. 자료 추가" />
           <h3 className="mt-2 text-lg font-black">분석할 원자료를 올려주세요</h3>
-          <p className="mt-1 text-sm leading-6 text-slate-500">파일을 올리거나 텍스트를 붙여넣으면, 분석 전에 자료가 어떻게 인식됐는지 먼저 보여드립니다.</p>
+            <p className="mt-1 text-sm leading-6 text-[#6c6a64]">파일을 먼저 올리면 바로 인식합니다. 연구 맥락은 나중에 보완해도 됩니다.</p>
         </div>
         <Tabs onValueChange={(value) => onModeChange(value as "file" | "text")} value={inputMode}>
           <TabsList>
@@ -599,20 +1181,20 @@ function InputPanel({
           </Field>
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        <div className="rounded-3xl border border-[#e6dfd8] bg-[#f5f0e8] p-4">
           <div className="flex flex-col gap-1">
-            <p className="text-sm font-black text-slate-950">분석 맥락</p>
-            <p className="text-sm leading-6 text-slate-500">연구 목적과 태스크를 넣으면 AI가 같은 발화도 더 정확한 리서치 관점으로 해석합니다.</p>
+            <p className="text-sm font-black text-[#141413]">선택 보완 맥락</p>
+            <p className="text-sm leading-6 text-[#6c6a64]">비워도 분석할 수 있습니다. 연구 목적과 태스크를 추가하면 이후 개별 분석과 종합 정확도가 올라갑니다.</p>
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-3">
             <Field label="연구 목적">
-              <Textarea className="min-h-28 bg-white" onChange={(event) => setResearchGoal(event.target.value)} value={researchGoal} />
+              <Textarea className="min-h-28" onChange={(event) => setResearchGoal(event.target.value)} value={researchGoal} />
             </Field>
             <Field label="평가 태스크">
-              <Textarea className="min-h-28 bg-white" onChange={(event) => setTasksText(event.target.value)} value={tasksText} />
+              <Textarea className="min-h-28" onChange={(event) => setTasksText(event.target.value)} value={tasksText} />
             </Field>
             <Field label="평가 기준">
-              <Textarea className="min-h-28 bg-white" onChange={(event) => setEvaluationCriteriaText(event.target.value)} value={evaluationCriteriaText} />
+              <Textarea className="min-h-28" onChange={(event) => setEvaluationCriteriaText(event.target.value)} value={evaluationCriteriaText} />
             </Field>
           </div>
         </div>
@@ -622,7 +1204,7 @@ function InputPanel({
             <div
               className={cn(
                 "group rounded-3xl border border-dashed p-8 transition",
-                file ? "border-blue-200 bg-blue-50/60" : "border-slate-300 bg-slate-50 hover:border-slate-400 hover:bg-white"
+                file ? "border-[#cc785c] bg-[#efe9de]" : "border-[#e6dfd8] bg-[#f5f0e8] hover:border-[#cc785c] hover:bg-[#faf9f5]"
               )}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
@@ -631,7 +1213,7 @@ function InputPanel({
               }}
             >
               <input
-                accept=".txt,.md,.markdown,.xlsx"
+                accept=".txt,.md,.markdown,.csv,.xlsx"
                 className="hidden"
                 onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
                 ref={fileInputRef}
@@ -639,12 +1221,12 @@ function InputPanel({
               />
               <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-slate-900 shadow-sm">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#faf9f5] text-[#252523] shadow-sm">
                     <FileText size={22} />
                   </div>
                   <div>
-                    <p className="text-base font-black text-slate-950">{file ? file.name : "파일을 끌어오거나 선택하세요"}</p>
-                    <p className="mt-1 text-sm leading-6 text-slate-500">TXT, Markdown, XLSX 파일을 지원합니다. 파일을 올리면 이 파일만 분석 대상으로 사용합니다.</p>
+                    <p className="text-base font-black text-[#141413]">{file ? file.name : "파일을 끌어오거나 선택하세요"}</p>
+                    <p className="mt-1 text-sm leading-6 text-[#6c6a64]">TXT, Markdown, CSV, XLSX 파일을 지원합니다. 파일을 올리면 이 파일만 분석 대상으로 사용합니다.</p>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -659,22 +1241,49 @@ function InputPanel({
                 </div>
               </div>
             </div>
+            {file ? (
+              <UploadedFileQueue
+                file={file}
+                previewingTabular={previewingTabular}
+                tabularPreview={tabularPreview}
+              />
+            ) : null}
+            {tabularPreview ? (
+              <TabularMappingPanel
+                columnMappings={columnMappings}
+                onMappingChange={onMappingChange}
+                preview={tabularPreview}
+              />
+            ) : null}
           </TabsContent>
           <TabsContent value="text">
             <Field label="직접 입력할 원자료">
               <Textarea
-                className="min-h-64"
+                className={cn("min-h-64", text.trim() ? "border-[#cc785c] focus-visible:ring-[#cc785c]" : "")}
                 onChange={(event) => setText(event.target.value)}
+                placeholder="인터뷰 발화, 관찰 메모, 설문 응답 텍스트를 여기에 붙여넣으세요"
                 value={text}
               />
+              <div className="mt-2 flex items-center gap-2">
+                {text.trim() ? (
+                  <>
+                    <span className="rounded-full bg-[#f5f0e8] px-2.5 py-0.5 text-xs font-semibold text-[#6c6a64]">
+                      {text.trim().length.toLocaleString()}자
+                    </span>
+                    <span className="text-xs text-[#6c6a64]">입력됨 · 아래 버튼으로 인식 결과를 확인하세요</span>
+                  </>
+                ) : (
+                  <span className="text-xs text-[#8e8b82]">텍스트를 입력하면 인식 준비 상태로 바뀝니다</span>
+                )}
+              </div>
             </Field>
           </TabsContent>
         </Tabs>
 
-        <div className="flex flex-col gap-3 rounded-2xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-2xl bg-[#f5f0e8] p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-bold text-slate-900">먼저 자료 인식 결과를 확인합니다</p>
-            <p className="mt-1 text-sm text-slate-500">AI 분석 전에 발화 단위, 참가자, 섹션을 확인할 수 있습니다.</p>
+            <p className="text-sm font-bold text-[#252523]">먼저 자료 인식 결과를 확인합니다</p>
+            <p className="mt-1 text-sm text-[#6c6a64]">AI 분석 전에 발화 단위, 참가자, 섹션을 확인할 수 있습니다.</p>
           </div>
           <Button disabled={recognizing || !canRecognize} onClick={onRecognize} type="button">
             {recognizing ? <Loader2 className="animate-spin" size={18} /> : <BadgeCheck size={18} />}
@@ -686,15 +1295,231 @@ function InputPanel({
   );
 }
 
+function SourceLibraryPanel({
+  activeSourceId,
+  analysisStage,
+  loading,
+  onAnalyzeSource,
+  onDeleteSource,
+  onSelectSource,
+  sources
+}: {
+  activeSourceId: string;
+  analysisStage: string;
+  loading: boolean;
+  onAnalyzeSource: (source: SourceRecord) => void;
+  onDeleteSource: (source: SourceRecord) => void;
+  onSelectSource: (sourceId: string) => void;
+  sources: SourceRecord[];
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <SectionKicker icon={<FolderOpen size={16} />} label="소스 라이브러리" />
+          <h3 className="mt-2 text-lg font-black">프로젝트 안의 원자료를 따로 관리합니다</h3>
+          <p className="mt-1 text-sm leading-6 text-[#6c6a64]">각 파일은 독립적으로 인식·분석되고, 분석 완료 소스가 2개 이상이면 종합 단계로 이어집니다.</p>
+        </div>
+        <Badge variant={sources.length ? "blue" : "muted"}>{sources.length}개 소스</Badge>
+      </CardHeader>
+      <CardContent>
+        {sources.length ? (
+          <div className="grid gap-3">
+            {sources.map((source) => {
+              const isActive = activeSourceId === source.id;
+              const isAnalyzing = loading && isActive;
+              return (
+                <div
+                  className={cn(
+                    "rounded-2xl border p-4 transition",
+                    isActive ? "border-[#cc785c] bg-[#fff7ef]" : "border-[#e6dfd8] bg-[#f5f0e8]"
+                  )}
+                  key={source.id}
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <button className="min-w-0 text-left" onClick={() => onSelectSource(source.id)} type="button">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#faf9f5] text-[#a9583e]">
+                          {source.source_type === "CSV" || source.source_type === "엑셀" ? <Database size={18} /> : <FileText size={18} />}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black text-[#252523]">{source.name}</p>
+                          <p className="mt-1 text-xs font-semibold text-[#6c6a64]">
+                            {source.detected_label} · 세그먼트 {source.segment_count}개 · 참가자 {source.participant_count || "?"}명
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={source.status === "분석완료" ? "green" : source.status === "분석중" || source.status === "오류" ? "amber" : "muted"}>
+                        {isAnalyzing ? "분석중" : source.status}
+                      </Badge>
+                      {source.insight_count ? <Badge variant="blue">인사이트 {source.insight_count}</Badge> : null}
+                      <Button disabled={loading} onClick={() => onAnalyzeSource(source)} size="sm" type="button">
+                        {isAnalyzing ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                        {source.status === "분석완료" ? "다시 분석" : "개별 분석"}
+                      </Button>
+                      <Button disabled={loading} onClick={() => onDeleteSource(source)} size="sm" type="button" variant="ghost">
+                        <Trash2 size={16} />
+                      </Button>
+                    </div>
+                  </div>
+                  {isAnalyzing ? (
+                    <div className="mt-3 rounded-xl bg-[#faf9f5] px-3 py-2 text-xs font-semibold text-[#6c6a64]">{analysisStage}</div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-[#e6dfd8] bg-[#f5f0e8] p-6 text-sm leading-6 text-[#6c6a64]">
+            아직 저장된 소스가 없습니다. 위에 파일을 드롭하면 프로젝트가 자동으로 준비되고 소스 라이브러리에 추가됩니다.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function UploadedFileQueue({
+  file,
+  previewingTabular,
+  tabularPreview
+}: {
+  file: File;
+  previewingTabular: boolean;
+  tabularPreview: TabularPreviewResponse | null;
+}) {
+  const isTabular = isTabularFile(file.name);
+  const status = isTabular ? (previewingTabular ? "컬럼 읽는 중" : tabularPreview ? "매핑 확인 필요" : "표 데이터") : "인식 대기";
+  return (
+    <div className="rounded-2xl border border-[#e6dfd8] bg-[#faf9f5] p-3">
+      <div className="flex items-center justify-between gap-3 rounded-xl bg-[#f5f0e8] p-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#efe9de] text-[#a9583e]">
+            {isTabular ? <Database size={18} /> : <FileText size={18} />}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black text-[#252523]">{file.name}</p>
+            <p className="mt-1 text-xs font-semibold text-[#6c6a64]">
+              {formatFileSize(file.size)} · {status}
+            </p>
+          </div>
+        </div>
+        <Badge variant={tabularPreview ? "amber" : "muted"}>{status}</Badge>
+      </div>
+    </div>
+  );
+}
+
+function TabularMappingPanel({
+  columnMappings,
+  onMappingChange,
+  preview
+}: {
+  columnMappings: Record<string, string>;
+  onMappingChange: (column: string, field: string) => void;
+  preview: TabularPreviewResponse;
+}) {
+  const requiredMappedCount = preview.required_fields.filter((field) => Object.values(columnMappings).includes(field)).length;
+  const evidenceFields = new Set(["task_success", "score", "error_count", "observation_note", "quote"]);
+  const evidenceMappedCount = Object.values(columnMappings).filter((field) => evidenceFields.has(field)).length;
+
+  return (
+    <div className="overflow-hidden rounded-3xl border border-[#e6dfd8] bg-[#faf9f5]">
+      <div className="border-b border-[#e6dfd8] bg-[#f5f0e8] p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <SectionKicker icon={<TableProperties size={16} />} label="CSV/XLSX 컬럼 매핑" />
+            <h4 className="mt-2 text-base font-black text-[#141413]">{preview.source_name}</h4>
+            <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
+              {preview.row_count}개 행의 헤더와 샘플값을 기준으로 시스템 필드를 제안했습니다. 애매한 컬럼은 직접 바꿀 수 있습니다.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={requiredMappedCount >= preview.required_fields.length ? "green" : "amber"}>
+              필수 {requiredMappedCount}/{preview.required_fields.length}
+            </Badge>
+            <Badge variant={evidenceMappedCount ? "blue" : "muted"}>근거 컬럼 {evidenceMappedCount}</Badge>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[760px] border-collapse text-left">
+          <thead className="bg-[#faf9f5] text-xs font-black text-[#6c6a64]">
+            <tr>
+              <th className="border-b border-r border-[#e6dfd8] px-4 py-3">원본 컬럼</th>
+              <th className="border-b border-r border-[#e6dfd8] px-4 py-3">시스템 필드</th>
+              <th className="border-b border-[#e6dfd8] px-4 py-3">샘플값</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#e6dfd8]">
+            {preview.columns.map((column) => {
+              const selectedField = columnMappings[column.source_column] ?? column.suggested_field;
+              const ignored = selectedField === "ignore";
+              return (
+                <tr className={cn("transition hover:bg-[#f5f0e8]", ignored && "opacity-60")} key={column.source_column}>
+                  <td className="border-r border-[#e6dfd8] px-4 py-3 align-top">
+                    <div className="flex items-start gap-2">
+                      <span className={cn("mt-1 h-2.5 w-2.5 rounded-full", column.confidence === "높음" ? "bg-[#5db8a6]" : column.confidence === "보통" ? "bg-[#e8a55a]" : "bg-[#c6bbae]")} />
+                      <div>
+                        <p className="font-mono text-sm font-bold text-[#252523]">{column.source_column}</p>
+                        <p className="mt-1 text-xs font-semibold text-[#8e8b82]">추정 신뢰도 {column.confidence}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="border-r border-[#e6dfd8] px-4 py-3 align-top">
+                    <select
+                      className="h-10 w-full rounded-lg border border-[#e6dfd8] bg-[#faf9f5] px-3 text-sm font-semibold text-[#252523] outline-none transition focus:border-[#cc785c] focus:ring-4 focus:ring-[#e6dfd8]"
+                      onChange={(event) => onMappingChange(column.source_column, event.target.value)}
+                      value={selectedField}
+                    >
+                      {preview.standard_fields.map((field) => (
+                        <option key={field.value} value={field.value}>
+                          {field.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-4 py-3 align-top">
+                    <div className="flex flex-wrap gap-2">
+                      {column.sample_values.length ? (
+                        column.sample_values.map((value, index) => (
+                          <span className="max-w-[240px] truncate rounded-lg border border-[#e6dfd8] bg-[#f5f0e8] px-2.5 py-1 font-mono text-xs text-[#6c6a64]" key={`${column.source_column}-${index}`}>
+                            {value}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="rounded-lg bg-[#f5f0e8] px-2.5 py-1 text-xs font-semibold text-[#8e8b82]">샘플 없음</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {preview.warnings.length ? (
+        <div className="border-t border-[#e6dfd8] bg-[#fff7e8] p-4 text-sm font-semibold text-[#8a6127]">
+          {preview.warnings.join(" ")}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function RecognitionPanel({ recognition }: { recognition: RecognitionResponse }) {
   return (
     <Card className="overflow-hidden">
-      <CardHeader className="bg-slate-950 text-white">
+      <CardHeader className="bg-[#141413] text-[#faf9f5]">
         <SectionKicker icon={<Layers3 size={16} />} label="2. 자료 인식 결과" tone="dark" />
         <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h3 className="text-xl font-black">{recognition.source_name}</h3>
-            <p className="mt-1 text-sm text-slate-300">이 자료를 {recognition.source_type} 자료로 인식했습니다.</p>
+            <p className="mt-1 text-sm text-[#d9cbbb]">이 자료를 {recognition.source_type} 자료로 인식했습니다.</p>
           </div>
           <Badge variant="blue">{recognition.participant_count || "?"}명 참가자</Badge>
         </div>
@@ -710,12 +1535,12 @@ function RecognitionPanel({ recognition }: { recognition: RecognitionResponse })
           <InfoBox title="인식된 참가자" value={recognition.participants.length ? recognition.participants.join(", ") : "명확히 인식되지 않음"} />
           <InfoBox title="주요 섹션/질문" value={recognition.topics.length ? recognition.topics.join(", ") : "명확히 인식되지 않음"} />
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-black text-slate-950">추출 내용 미리보기</p>
+        <div className="rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4">
+          <p className="text-sm font-black text-[#141413]">추출 내용 미리보기</p>
           <div className="mt-3 grid gap-2">
             {recognition.preview_segments.slice(0, 5).map((segment) => (
-              <p className="rounded-xl bg-white px-3 py-2 text-sm leading-6 text-slate-600" key={segment.id}>
-                <strong className="text-slate-950">{segment.participant}</strong> · {segment.question_or_topic}: {segment.content}
+              <p className="rounded-xl bg-[#faf9f5] px-3 py-2 text-sm leading-6 text-[#6c6a64]" key={segment.id}>
+                <strong className="text-[#141413]">{segment.participant}</strong> · {segment.question_or_topic}: {segment.content}
               </p>
             ))}
           </div>
@@ -739,16 +1564,16 @@ function EmptyAnalysisState({
   return (
     <Card className="border-dashed">
       <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#efe9de] text-[#a9583e]">
           <Sparkles size={24} />
         </div>
         <h3 className="mt-4 text-lg font-black">분석 결과가 이곳에 정리됩니다</h3>
-        <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">자료 인식 후 AI 분석을 시작하면 핵심 결론, 검수 가능한 인사이트, 보고서 초안이 순서대로 생성됩니다.</p>
+        <p className="mt-2 max-w-xl text-sm leading-6 text-[#6c6a64]">자료 인식 후 AI 분석을 시작하면 핵심 결론, 검수 가능한 인사이트, 보고서 초안이 순서대로 생성됩니다.</p>
         {loading ? (
-          <div className="mt-5 w-full max-w-md rounded-2xl bg-slate-50 p-4 text-left">
-            <p className="text-sm font-bold text-slate-900">{analysisStage}</p>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
-              <motion.div className="h-full rounded-full bg-slate-950" initial={{ width: "12%" }} animate={{ width: "88%" }} transition={{ duration: 2.2, repeat: Infinity, repeatType: "reverse" }} />
+          <div className="mt-5 w-full max-w-md rounded-2xl bg-[#f5f0e8] p-4 text-left">
+            <p className="text-sm font-bold text-[#252523]">{analysisStage}</p>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8e0d2]">
+              <motion.div className="h-full rounded-full bg-[#cc785c]" initial={{ width: "12%" }} animate={{ width: "88%" }} transition={{ duration: 2.2, repeat: Infinity, repeatType: "reverse" }} />
             </div>
           </div>
         ) : null}
@@ -758,7 +1583,7 @@ function EmptyAnalysisState({
             AI 분석 시작
           </Button>
         ) : (
-          <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+          <div className="mt-5 rounded-2xl bg-[#f5f0e8] px-4 py-3 text-sm font-semibold text-[#6c6a64]">
             먼저 자료를 추가하고 인식 결과를 확인하세요.
           </div>
         )}
@@ -787,7 +1612,7 @@ function ActionPanel({
       <CardContent>
         <SectionKicker icon={<Sparkles size={16} />} label="다음 액션" />
         <h3 className="mt-3 text-lg font-black">{result ? "인사이트를 검수하세요" : recognition ? "AI 분석을 시작할 수 있습니다" : "자료를 먼저 추가하세요"}</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-500">
+        <p className="mt-2 text-sm leading-6 text-[#6c6a64]">
           {result ? "승인한 인사이트만 보고서 초안에 반영됩니다." : recognition ? "분석은 원자료를 나눠 읽고 근거 발화를 연결합니다." : "파일 업로드 또는 텍스트 입력 후 자료 인식 결과를 확인하세요."}
         </p>
         {recognition && !result ? (
@@ -796,14 +1621,14 @@ function ActionPanel({
             {loading ? "인사이트 후보 생성 중" : "AI 분석 시작"}
           </Button>
         ) : (
-          <div className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">
+          <div className="mt-5 rounded-2xl bg-[#f5f0e8] p-4 text-sm font-semibold text-[#6c6a64]">
             {result ? "검수 카드에서 승인 여부를 결정하세요." : "먼저 자료 인식 결과 확인을 진행하세요."}
           </div>
         )}
         {loading ? (
-          <div className="mt-4 rounded-2xl bg-slate-50 p-3">
-            <p className="text-xs font-bold text-slate-500">현재 처리 단계</p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">{analysisStage}</p>
+          <div className="mt-4 rounded-2xl bg-[#f5f0e8] p-3">
+            <p className="text-xs font-bold text-[#6c6a64]">현재 처리 단계</p>
+            <p className="mt-1 text-sm font-semibold text-[#252523]">{analysisStage}</p>
           </div>
         ) : null}
       </CardContent>
@@ -812,6 +1637,7 @@ function ActionPanel({
 }
 
 function SupportPanel({ result }: { result: AnalysisResponse | null }) {
+  const insights = result?.analysis.insights ?? [];
   return (
     <Card>
       <CardHeader>
@@ -821,29 +1647,28 @@ function SupportPanel({ result }: { result: AnalysisResponse | null }) {
         {result ? (
           <>
             <div>
-              <p className="text-xs font-bold text-slate-500">주요 키워드</p>
+              <p className="text-xs font-bold text-[#6c6a64]">영향도 분포</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                {result.analysis.keywords.slice(0, 16).map((keyword) => (
-                  <Badge key={keyword.keyword} variant="blue">
-                    {keyword.keyword} · {keyword.count}
+                {["높음", "보통", "낮음"].map((level) => (
+                  <Badge key={level} variant="blue">
+                    {level} · {insights.filter((insight) => insight.severity === level).length}
                   </Badge>
                 ))}
               </div>
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-500">주제 묶음</p>
+              <p className="text-xs font-bold text-[#6c6a64]">관련 태스크</p>
               <div className="mt-2 grid gap-2">
-                {result.analysis.topics.slice(0, 4).map((topic) => (
-                  <div className="rounded-xl bg-slate-50 p-3" key={topic.id}>
-                    <p className="text-sm font-bold">{topic.topic_name}</p>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{topic.summary}</p>
+                {Array.from(new Set(insights.flatMap((insight) => insight.related_tasks))).slice(0, 4).map((task) => (
+                  <div className="rounded-xl bg-[#f5f0e8] p-3" key={task}>
+                    <p className="text-sm font-bold">{task}</p>
                   </div>
                 ))}
               </div>
             </div>
           </>
         ) : (
-          <p className="text-sm leading-6 text-slate-500">분석이 완료되면 키워드와 주제 묶음이 이곳에 표시됩니다.</p>
+          <p className="text-sm leading-6 text-[#6c6a64]">분석이 완료되면 영향도와 관련 태스크가 이곳에 표시됩니다.</p>
         )}
       </CardContent>
     </Card>
@@ -870,13 +1695,28 @@ function AnalysisWorkspace({
   segmentTopicOverrides: Record<string, string>;
 }) {
   const topInsight = result.analysis.insights[0];
+  const [selectedInsightId, setSelectedInsightId] = useState(reviewedInsights[0]?.id ?? "");
+  const [filter, setFilter] = useState<"all" | ReviewStatus>("all");
+  const selectedInsight = reviewedInsights.find((insight) => insight.id === selectedInsightId) ?? reviewedInsights[0];
+  const filteredInsights = reviewedInsights.filter((insight) => filter === "all" || insight.reviewStatus === filter);
+
+  useEffect(() => {
+    if (!reviewedInsights.length) {
+      setSelectedInsightId("");
+      return;
+    }
+    if (!reviewedInsights.some((insight) => insight.id === selectedInsightId)) {
+      setSelectedInsightId(reviewedInsights[0].id);
+    }
+  }, [reviewedInsights, selectedInsightId]);
+
   return (
     <div className="grid gap-5">
       <Card className="overflow-hidden">
-        <CardContent className="bg-slate-950 p-6 text-white">
-          <Badge variant="blue">핵심 결론</Badge>
+        <CardContent className="bg-[#141413] p-6 text-[#faf9f5]">
+          <Badge variant="amber">핵심 결론</Badge>
           <h3 className="mt-4 text-2xl font-black leading-tight">{topInsight?.title || "핵심 결론 생성 대기"}</h3>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-300">{topInsight?.summary || "분석 결과에서 핵심 결론을 찾지 못했습니다."}</p>
+          <p className="mt-3 max-w-4xl text-sm leading-6 text-[#d9cbbb]">{topInsight?.summary || "분석 결과에서 핵심 결론을 찾지 못했습니다."}</p>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <MetricCard dark label="검수 대기" value={`${needsReviewCount}개`} />
             <MetricCard dark label="승인" value={`${approvedInsights.length}개`} />
@@ -885,26 +1725,201 @@ function AnalysisWorkspace({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <SectionKicker icon={<ClipboardCheck size={16} />} label="3. 인사이트 검수" />
-          <h3 className="mt-2 text-lg font-black">보고서에 넣을 인사이트를 승인하세요</h3>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          {reviewedInsights.map((insight, index) => (
-            <InsightReviewCard
-              index={index}
-              insight={insight}
-              key={insight.id}
-              onUpdateInsight={onUpdateInsight}
-              segmentById={segmentById}
-            />
-          ))}
-        </CardContent>
-      </Card>
+      <div className="grid gap-5 2xl:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)]">
+        <Card className="overflow-hidden">
+          <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <SectionKicker icon={<ClipboardCheck size={16} />} label="인사이트 큐" />
+              <h3 className="mt-2 text-lg font-black">AI 초안을 빠르게 훑고 선택하세요</h3>
+            </div>
+            <div className="grid grid-cols-4 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
+              {(["all", "수정 필요", "승인", "제외"] as const).map((status) => (
+                <button
+                  className={cn(
+                    "rounded-lg px-3 py-2 transition",
+                    filter === status && "bg-[#faf9f5] text-[#141413] shadow-sm"
+                  )}
+                  key={status}
+                  onClick={() => setFilter(status)}
+                  type="button"
+                >
+                  {status === "all" ? "전체" : status}
+                </button>
+              ))}
+            </div>
+          </CardHeader>
+          <CardContent className="max-h-[720px] overflow-y-auto bg-[#f5f0e8] p-4">
+            <div className="grid gap-3">
+              {filteredInsights.length ? (
+                filteredInsights.map((insight, index) => {
+                  const isSelected = insight.id === selectedInsight?.id;
+                  return (
+                    <button
+                      className={cn(
+                        "relative rounded-2xl border bg-[#faf9f5] p-4 text-left shadow-sm transition hover:border-[#cc785c]/60",
+                        isSelected ? "border-[#cc785c] ring-1 ring-[#cc785c]/30" : "border-[#e6dfd8]",
+                        insight.reviewStatus === "제외" && "opacity-60"
+                      )}
+                      key={insight.id}
+                      onClick={() => setSelectedInsightId(insight.id)}
+                      type="button"
+                    >
+                      {isSelected ? <span className="absolute bottom-3 left-0 top-3 w-1 rounded-r-full bg-[#cc785c]" /> : null}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant={insight.reviewStatus === "승인" ? "green" : insight.reviewStatus === "제외" ? "muted" : "amber"}>
+                            {insight.reviewStatus}
+                          </Badge>
+                          <Badge variant="muted">{readableInsightType(insight.type)}</Badge>
+                        </div>
+                        <span className="text-xs font-black text-[#8e8b82]">{index + 1}</span>
+                      </div>
+                      <h4 className="mt-3 line-clamp-2 text-sm font-black leading-6 text-[#141413]">{insight.title}</h4>
+                      <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#6c6a64]">{insight.summary}</p>
+                      <div className="mt-4 flex flex-wrap gap-2 border-t border-[#ebe6df] pt-3">
+                        <span className="text-xs font-bold text-[#a9583e]">영향도 {insight.severity}</span>
+                        <span className="text-xs font-bold text-[#6c6a64]">빈도 {insight.frequency}</span>
+                        <span className="text-xs font-bold text-[#6c6a64]">신뢰도 {insight.confidence}</span>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="rounded-2xl border border-dashed border-[#e6dfd8] bg-[#faf9f5] p-8 text-center text-sm text-[#6c6a64]">
+                  이 필터에 해당하는 인사이트가 없습니다.
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <InsightInspector
+          insight={selectedInsight}
+          onUpdateInsight={onUpdateInsight}
+          segmentById={segmentById}
+        />
+      </div>
 
       <AffinityBoard onMoveSegment={onMoveSegment} result={result} segmentById={segmentById} segmentTopicOverrides={segmentTopicOverrides} />
     </div>
+  );
+}
+
+function InsightInspector({
+  insight,
+  onUpdateInsight,
+  segmentById
+}: {
+  insight: ReviewedInsight | undefined;
+  onUpdateInsight: (insightId: string, updates: Partial<ReviewedInsight>) => void;
+  segmentById: Map<string, Segment>;
+}) {
+  if (!insight) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center text-sm text-[#6c6a64]">검수할 인사이트를 선택하세요.</CardContent>
+      </Card>
+    );
+  }
+
+  const evidenceSegmentIds = getEvidenceSegmentIds(insight);
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="sticky top-0 z-10 flex flex-col gap-4 bg-[#faf9f5] lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <SectionKicker icon={<Sparkles size={16} />} label="상세 검수" />
+          <h3 className="mt-2 text-lg font-black">근거와 제안을 함께 확인하세요</h3>
+        </div>
+        <div className="grid grid-cols-3 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
+          {(["승인", "수정 필요", "제외"] as ReviewStatus[]).map((status) => (
+            <button
+              className={cn(
+                "flex items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
+                insight.reviewStatus === status && "bg-[#faf9f5] text-[#141413] shadow-sm"
+              )}
+              key={status}
+              onClick={() => onUpdateInsight(insight.id, { reviewStatus: status })}
+              type="button"
+            >
+              {status === "승인" ? <CheckCircle2 size={14} /> : status === "제외" ? <CircleSlash size={14} /> : null}
+              {status}
+            </button>
+          ))}
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="muted">{readableInsightType(insight.type)}</Badge>
+            <Badge variant="amber">영향도 {insight.severity}</Badge>
+            <Badge variant="blue">빈도 {insight.frequency}</Badge>
+            <Badge variant="green">신뢰도 {insight.confidence}</Badge>
+          </div>
+          <h4 className="mt-4 text-xl font-black leading-8 text-[#141413]">{insight.title}</h4>
+          <p className="mt-3 text-sm leading-7 text-[#3d3d3a]">{insight.summary}</p>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Field label="인사이트 제목">
+            <Input value={insight.title} onChange={(event) => onUpdateInsight(insight.id, { title: event.target.value, reviewStatus: "수정 필요" })} />
+          </Field>
+          <Field label="유형">
+            <Input value={readableInsightType(insight.type)} readOnly />
+          </Field>
+        </div>
+
+        <Field label="맥락과 반복 패턴">
+          <Textarea
+            className="min-h-28"
+            value={insight.summary}
+            onChange={(event) => onUpdateInsight(insight.id, { summary: event.target.value, reviewStatus: "수정 필요" })}
+          />
+        </Field>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          {(["severity", "frequency", "confidence"] as const).map((field) => (
+            <Field key={field} label={field === "severity" ? "영향도" : field === "frequency" ? "빈도" : "신뢰도"}>
+              <Input value={insight[field]} onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, reviewStatus: "수정 필요" })} />
+            </Field>
+          ))}
+        </div>
+
+        <Field label="개선 제안">
+          <Textarea
+            className="min-h-28"
+            value={insight.recommendation}
+            onChange={(event) => onUpdateInsight(insight.id, { recommendation: event.target.value, reviewStatus: "수정 필요" })}
+          />
+        </Field>
+
+        <div className="rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-black text-[#141413]">근거 발화</p>
+            <Badge variant="muted">{evidenceSegmentIds.length}개 연결</Badge>
+          </div>
+          <div className="mt-3 grid gap-3">
+            {evidenceSegmentIds.length ? (
+              evidenceSegmentIds.slice(0, 5).map((segmentId) => {
+                const segment = segmentById.get(segmentId);
+                if (!segment) return null;
+                return (
+                  <blockquote className="rounded-xl border-l-2 border-[#cc785c] bg-[#faf9f5] p-4 text-sm leading-6 text-[#3d3d3a]" key={segmentId}>
+                    <div className="mb-2 flex items-center justify-between gap-3 text-xs font-bold text-[#6c6a64]">
+                      <span>{segment.participant}</span>
+                      <span>{segment.question_or_topic}</span>
+                    </div>
+                    {segment.content}
+                  </blockquote>
+                );
+              })
+            ) : (
+              <p className="rounded-xl bg-[#faf9f5] p-4 text-sm text-[#6c6a64]">연결된 근거 발화가 없습니다.</p>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -919,7 +1934,8 @@ function InsightReviewCard({
   onUpdateInsight: (insightId: string, updates: Partial<ReviewedInsight>) => void;
   segmentById: Map<string, Segment>;
 }) {
-  const evidencePreview = insight.evidence_segment_ids
+  const evidenceSegmentIds = getEvidenceSegmentIds(insight);
+  const evidencePreview = evidenceSegmentIds
     .map((segmentId) => segmentById.get(segmentId))
     .find(Boolean);
   return (
@@ -961,7 +1977,12 @@ function InsightReviewCard({
 
       <div className="mt-4">
         <h4 className="text-lg font-black leading-7 text-slate-950">{insight.title}</h4>
-        <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">{insight.interpretation || insight.summary}</p>
+        <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">{insight.summary}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Badge variant="amber">영향도 {insight.severity}</Badge>
+          <Badge variant="blue">빈도 {insight.frequency}</Badge>
+          <Badge variant="muted">신뢰도 {insight.confidence}</Badge>
+        </div>
         {evidencePreview ? (
           <p className="mt-3 rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-600">
             <strong className="text-slate-950">{evidencePreview.participant}</strong>: {evidencePreview.content}
@@ -981,17 +2002,21 @@ function InsightReviewCard({
           <Field label="구조적 해석">
             <Textarea
               className="min-h-28"
-              value={insight.interpretation || insight.summary}
-              onChange={(event) => onUpdateInsight(insight.id, { interpretation: event.target.value, reviewStatus: "수정 필요" })}
+              value={insight.summary}
+              onChange={(event) => onUpdateInsight(insight.id, { summary: event.target.value, reviewStatus: "수정 필요" })}
             />
           </Field>
           <div className="grid gap-4 lg:grid-cols-2">
-            <Field label="왜 중요한가">
-              <Textarea
-                className="min-h-24"
-                value={insight.why_it_matters || ""}
-                onChange={(event) => onUpdateInsight(insight.id, { why_it_matters: event.target.value, reviewStatus: "수정 필요" })}
-              />
+            <Field label="영향도 / 빈도 / 신뢰도">
+              <div className="grid gap-2 sm:grid-cols-3">
+                {(["severity", "frequency", "confidence"] as const).map((field) => (
+                  <Input
+                    key={field}
+                    value={insight[field]}
+                    onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, reviewStatus: "수정 필요" })}
+                  />
+                ))}
+              </div>
             </Field>
             <Field label="권장 조치">
               <Textarea
@@ -1004,7 +2029,7 @@ function InsightReviewCard({
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
             <p className="text-sm font-black text-slate-800">근거 발화</p>
             <div className="mt-3 grid gap-2">
-              {insight.evidence_segment_ids.slice(0, 4).map((segmentId) => {
+              {evidenceSegmentIds.slice(0, 4).map((segmentId) => {
                 const segment = segmentById.get(segmentId);
                 if (!segment) return null;
                 return (
@@ -1051,7 +2076,7 @@ function ReportPanel({
           <div className="rounded-3xl border border-slate-200 bg-white p-6">
             <article className="mx-auto max-w-3xl">
               <p className="text-sm font-bold text-slate-500">UX 리서치 보고서 초안</p>
-              <h2 className="mt-2 text-2xl font-black tracking-tight">{result.project_name}</h2>
+              <h2 className="mt-2 text-2xl font-black ">{result.project_name}</h2>
               <div className="mt-5 grid gap-3 sm:grid-cols-3">
                 <MetricCard label="자료" value={result.source_name} />
                 <MetricCard label="승인 인사이트" value={`${approvedInsights.length}개`} />
@@ -1065,7 +2090,7 @@ function ReportPanel({
                   {approvedInsights.map((insight, index) => (
                     <div className="rounded-2xl bg-slate-50 p-4" key={insight.id}>
                       <h4 className="font-black">{index + 1}. {insight.title}</h4>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">{insight.interpretation || insight.summary}</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">{insight.summary}</p>
                       <p className="mt-3 text-sm font-semibold text-slate-900">제안: {insight.recommendation}</p>
                     </div>
                   ))}
@@ -1086,6 +2111,31 @@ function ReportPanel({
   );
 }
 
+function SynthesisPlaceholder({ sources }: { sources: SourceRecord[] }) {
+  const analyzedSources = sources.filter((source) => source.status === "분석완료");
+  return (
+    <Card>
+      <CardHeader>
+        <SectionKicker icon={<Network size={16} />} label="종합" />
+        <h3 className="mt-2 text-lg font-black">소스 간 패턴을 연결하는 단계입니다</h3>
+        <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
+          개별 분석이 완료된 소스들의 인사이트를 모아 반복 패턴, 소스별 특이점, 상충되는 발견을 분리합니다.
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <MetricCard label="전체 소스" value={`${sources.length}개`} />
+          <MetricCard label="분석 완료" value={`${analyzedSources.length}개`} />
+          <MetricCard label="필요 조건" value="2개 이상" />
+        </div>
+        <div className="rounded-2xl bg-[#f5f0e8] p-4 text-sm leading-6 text-[#6c6a64]">
+          다음 구현 단계에서 이 영역에 `종합 인사이트 도출` 버튼과 cross-source synthesis 결과가 들어갑니다.
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function AffinityBoard({
   onMoveSegment,
   result,
@@ -1097,6 +2147,7 @@ function AffinityBoard({
   segmentById: Map<string, Segment>;
   segmentTopicOverrides: Record<string, string>;
 }) {
+  const topicOptions = result.analysis.topics?.slice(0, 6) ?? [];
   const palettes = [
     {
       rail: "from-amber-400 to-orange-400",
@@ -1126,11 +2177,10 @@ function AffinityBoard({
   const rotations = ["-rotate-1", "rotate-1", "-rotate-2", "rotate-2"];
   const noteOffsets = ["translate-x-0", "translate-x-3", "-translate-x-2", "translate-x-5", "-translate-x-4"];
   const [draggingSegmentId, setDraggingSegmentId] = useState<string | null>(null);
-  const topicOptions = result.analysis.topics.slice(0, 6);
   const topicSegmentIds = useMemo(() => {
     const map = new Map<string, string[]>();
-    result.analysis.topics.slice(0, 6).forEach((topic) => map.set(topic.id, []));
-    result.analysis.topics.forEach((topic) => {
+    topicOptions.forEach((topic) => map.set(topic.id, []));
+    (result.analysis.topics ?? []).forEach((topic) => {
       topic.segment_ids.forEach((segmentId) => {
         const overrideTopicId = segmentTopicOverrides[segmentId];
         const targetTopicId = overrideTopicId || topic.id;
@@ -1142,7 +2192,11 @@ function AffinityBoard({
       });
     });
     return map;
-  }, [result.analysis.topics, segmentTopicOverrides]);
+  }, [result.analysis.topics, segmentTopicOverrides, topicOptions]);
+
+  if (!topicOptions.length) {
+    return null;
+  }
 
   return (
     <Card className="overflow-hidden">
@@ -1152,7 +2206,7 @@ function AffinityBoard({
 		          <h3 className="mt-2 text-lg font-black">발화가 어떤 주제로 모였는지 보드에서 훑어보세요</h3>
 		          <p className="mt-1 text-sm leading-6 text-slate-500">어색하게 묶인 포스트잇은 끌어서 다른 주제 영역에 놓을 수 있습니다.</p>
         </div>
-        <Badge variant="blue">{result.analysis.topics.length}개 주제</Badge>
+        <Badge variant="blue">{topicOptions.length}개 주제</Badge>
       </CardHeader>
       <CardContent>
         <div
@@ -1329,11 +2383,41 @@ function formatSavedTime(value: string) {
   return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
 }
 
+function normalizeProject(project: ProjectSummary & { project_slug?: string }): ProjectSummary {
+  const slug = project.slug || project.project_slug || "";
+  return {
+    ...project,
+    slug,
+    name: project.name || project.project_name || slug || "이름 없는 프로젝트"
+  };
+}
+
+function isTabularFile(filename: string) {
+  const normalized = filename.toLowerCase();
+  return normalized.endsWith(".csv") || normalized.endsWith(".xlsx");
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function splitTextareaLines(value: string) {
   return value
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function readableInsightType(type: string) {
+  const labels: Record<string, string> = {
+    pain_point: "페인포인트",
+    usability_issue: "사용성 이슈",
+    positive_signal: "긍정 신호",
+    task_friction: "태스크 마찰",
+  };
+  return labels[type] ?? type;
 }
 
 function buildReportMarkdown(
@@ -1345,18 +2429,13 @@ function buildReportMarkdown(
 ) {
   if (!result || !approvedInsights.length) return "";
 
-  const topicSummary = result.analysis.topics
-    .slice(0, 5)
-    .map((topic) => `- ${topic.topic_name}: ${topic.summary}`)
+  const typeSummary = Array.from(new Set(approvedInsights.map((insight) => insight.type)))
+    .map((type) => `- ${type}: ${approvedInsights.filter((insight) => insight.type === type).length}개`)
     .join("\n");
-  const keywordSummary = result.analysis.keywords
-    .slice(0, 12)
-    .map((keyword) => keyword.keyword)
-    .join(", ");
 
   const findingSections = approvedInsights
     .map((insight, index) => {
-      const evidence = insight.evidence_segment_ids
+      const evidence = getEvidenceSegmentIds(insight)
         .slice(0, 3)
         .map((segmentId) => segmentById.get(segmentId))
         .filter(Boolean)
@@ -1365,12 +2444,12 @@ function buildReportMarkdown(
 
       return `### ${index + 1}. ${insight.title}
 
-${insight.interpretation || insight.summary}
+${insight.summary}
 
-**왜 중요한가**  
-${insight.why_it_matters || "추가 검토가 필요합니다."}
+**영향도 / 빈도 / 신뢰도**
+${insight.severity} / ${insight.frequency} / ${insight.confidence}
 
-**개선 제안**  
+**개선 제안**
 ${insight.recommendation}
 
 **근거 발화**
@@ -1379,7 +2458,7 @@ ${evidence || "  - 연결된 근거 발화가 없습니다."}`;
     .join("\n\n");
 
   const appendixEvidence = approvedInsights
-    .flatMap((insight) => insight.evidence_segment_ids)
+    .flatMap((insight) => getEvidenceSegmentIds(insight))
     .filter((segmentId, index, segmentIds) => segmentIds.indexOf(segmentId) === index)
     .map((segmentId) => segmentById.get(segmentId))
     .filter(Boolean)
@@ -1389,7 +2468,7 @@ ${evidence || "  - 연결된 근거 발화가 없습니다."}`;
   return `# ${projectName} UX 리서치 보고서 초안
 
 ## Executive Summary
-이번 분석에서는 ${approvedInsights.length}개의 핵심 인사이트를 승인했습니다. 주요 키워드는 ${keywordSummary || "추가 분석 필요"}입니다.
+이번 분석에서는 ${approvedInsights.length}개의 핵심 인사이트를 승인했습니다.
 
 ## 조사 배경
 - 프로젝트명: ${projectName}
@@ -1404,8 +2483,8 @@ ${evidence || "  - 연결된 근거 발화가 없습니다."}`;
 ## 핵심 발견
 ${findingSections}
 
-## 사용성 이슈
-${topicSummary || "- 반복 주제가 충분히 식별되지 않았습니다."}
+## 인사이트 유형
+${typeSummary || "- 추가 검토가 필요합니다."}
 
 ## 개선 제안
 ${approvedInsights.map((insight, index) => `${index + 1}. ${insight.recommendation}`).join("\n")}
@@ -1413,6 +2492,14 @@ ${approvedInsights.map((insight, index) => `${index + 1}. ${insight.recommendati
 ## Appendix
 ${appendixEvidence || "- 승인된 인사이트에 연결된 근거 발화가 없습니다."}
 `;
+}
+
+function getEvidenceSegmentIds(insight: Insight) {
+  return (insight.supporting_quotes ?? [])
+    .map((quote) => quote.source_id)
+    .filter(Boolean)
+    .concat(insight.evidence_segment_ids ?? [])
+    .filter((segmentId, index, segmentIds) => segmentIds.indexOf(segmentId) === index);
 }
 
 function downloadMarkdown(markdown: string) {

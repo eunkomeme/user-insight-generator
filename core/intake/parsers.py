@@ -25,9 +25,16 @@ def parse_uploaded_research_file(filename: str, content: bytes) -> ParsedUpload:
     if suffix in {".txt", ".md", ".markdown"}:
         text = content.decode("utf-8-sig", errors="replace")
         return ParsedUpload(_parse_text_segments(filename, suffix, text), [])
+    if suffix == ".csv":
+        return _parse_csv_segments(filename, content)
     if suffix == ".xlsx":
         return _parse_xlsx_segments(filename, content)
-    return ParsedUpload([], [".md, .txt, .xlsx 파일만 지원합니다."])
+    # 확장자가 없거나 미지원인 경우 텍스트로 시도
+    try:
+        text = content.decode("utf-8-sig", errors="replace")
+        return ParsedUpload(_parse_text_segments(filename, ".txt", text), [])
+    except Exception:
+        return ParsedUpload([], [".md, .txt, .csv, .xlsx 파일만 지원합니다."])
 
 
 def _parse_text_segments(filename: str, suffix: str, text: str) -> list[Segment]:
@@ -197,6 +204,52 @@ def _parse_xlsx_segments(filename: str, content: bytes) -> ParsedUpload:
     return ParsedUpload(segments, warnings)
 
 
+def _parse_csv_segments(filename: str, content: bytes) -> ParsedUpload:
+    try:
+        frame = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        frame = pd.read_csv(io.BytesIO(content), encoding="cp949")
+    except Exception as exc:
+        return ParsedUpload([], [f"CSV 파일을 읽는 중 오류가 발생했습니다: {exc}"])
+
+    return _parse_table_segments(filename, frame, "CSV")
+
+
+def _parse_table_segments(filename: str, frame: pd.DataFrame, source_type: str) -> ParsedUpload:
+    if frame.empty:
+        return ParsedUpload([], [f"{source_type} 파일에 읽을 수 있는 행이 없습니다."])
+
+    column_map = _detect_columns(list(frame.columns))
+    segments: list[Segment] = []
+    for row_index, row in frame.fillna("").iterrows():
+        content_value = _join_content(row, column_map)
+        if not content_value.strip():
+            continue
+        segments.append(
+            Segment(
+                id=f"seg_{len(segments) + 1:04d}",
+                participant=str(row.get(column_map.get("participant", ""), "")).strip() or UNKNOWN_PARTICIPANT,
+                question_or_topic=str(row.get(column_map.get("topic", ""), "")).strip() or UNKNOWN_TOPIC,
+                content=content_value.strip(),
+                source_file=filename,
+                source_type=source_type,
+                source_location=f"row {row_index + 2}",
+                include_in_analysis=str(row.get(column_map.get("participant", ""), "")).strip() != "진행자",
+                created_at=utc_now(),
+            )
+        )
+
+    warnings = []
+    if not column_map.get("participant"):
+        warnings.append("참여자 컬럼을 찾지 못해 '참여자 미확인'으로 표시했습니다.")
+    if not column_map.get("topic"):
+        warnings.append("질문/주제 컬럼을 찾지 못해 '질문 미확인'으로 표시했습니다.")
+    if not segments:
+        warnings.append("분석할 수 있는 응답/메모 컬럼을 찾지 못했습니다.")
+
+    return ParsedUpload(segments, warnings)
+
+
 def _detect_columns(columns: list[str]) -> dict[str, str]:
     normalized = {str(column).strip().lower(): str(column) for column in columns}
 
@@ -208,10 +261,10 @@ def _detect_columns(columns: list[str]) -> dict[str, str]:
         return ""
 
     return {
-        "participant": find({"participant", "participants", "p", "참여자", "인터뷰이", "사용자", "대상자"}),
-        "topic": find({"question", "questions", "topic", "task", "질문", "주제", "태스크", "과업"}),
-        "answer": find({"answer", "answers", "response", "responses", "답변", "응답", "발화"}),
-        "memo": find({"memo", "note", "notes", "observation", "메모", "관찰", "관찰메모", "비고"}),
+        "participant": find({"participant", "participants", "userid", "uid", "pid", "p", "참여자", "인터뷰이", "사용자", "대상자"}),
+        "topic": find({"question", "questions", "topic", "task", "scenario", "질문", "주제", "태스크", "과업", "시나리오"}),
+        "answer": find({"answer", "answers", "response", "responses", "quote", "utterance", "transcript", "답변", "응답", "발화", "인용"}),
+        "memo": find({"memo", "note", "notes", "observation", "comment", "remark", "메모", "관찰", "관찰메모", "비고", "코멘트"}),
     }
 
 

@@ -16,15 +16,25 @@ export type Topic = {
 
 export type Insight = {
   id: string;
+  type: string;
   title: string;
   summary: string;
+  severity: string;
+  frequency: string;
   recommendation: string;
   interpretation?: string;
   why_it_matters?: string;
   product_implication?: string;
-  topic_ids: string[];
-  evidence_segment_ids: string[];
-  participants: string[];
+  topic_ids?: string[];
+  evidence_segment_ids?: string[];
+  participants?: string[];
+  related_tasks: string[];
+  related_participants: string[];
+  supporting_quotes: {
+    quote: string;
+    participant: string;
+    source_id: string;
+  }[];
   confidence: string;
   status: string;
 };
@@ -35,14 +45,28 @@ export type ReviewedInsight = Insight & {
   reviewStatus: ReviewStatus;
 };
 
+export type ProjectSummary = {
+  slug: string;
+  name: string;
+  project_name?: string;
+  research_goal?: string;
+  product_or_feature?: string;
+  participant_count?: number;
+  tasks?: string[];
+  evaluation_criteria?: string[];
+  created_at?: string;
+  updated_at?: string;
+  path?: string;
+};
+
 export type AnalysisResponse = {
   project_name: string;
   source_name: string;
   segment_count: number;
   segments: Segment[];
   analysis: {
-    keywords: { keyword: string; count: number }[];
-    topics: Topic[];
+    keywords?: { keyword: string; count: number }[];
+    topics?: Topic[];
     insights: Insight[];
     participant_mentions: Record<string, number>;
   };
@@ -52,6 +76,7 @@ export type AnalysisResponse = {
 export type RecognitionResponse = {
   source_name: string;
   source_type: string;
+  detected_label?: string;
   segment_count: number;
   participant_count: number;
   participants: string[];
@@ -71,7 +96,44 @@ export type RecognitionResponse = {
   };
 };
 
+export type SourceRecord = {
+  id: string;
+  name: string;
+  source_type: string;
+  status: string;
+  detected_label: string;
+  raw_path: string;
+  segment_count: number;
+  participant_count: number;
+  insight_count: number;
+  warnings: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type TabularColumnSuggestion = {
+  source_column: string;
+  suggested_field: string;
+  label: string;
+  confidence: string;
+  sample_values: string[];
+};
+
+export type TabularPreviewResponse = {
+  source_name: string;
+  source_type: string;
+  row_count: number;
+  columns: TabularColumnSuggestion[];
+  sample_rows: Record<string, string>[];
+  standard_fields: { value: string; label: string }[];
+  required_fields: string[];
+  required_mapped_count: number;
+  evidence_mapped_count: number;
+  warnings: string[];
+};
+
 export type DraftState = {
+  activeProjectSlug?: string;
   projectName: string;
   sourceName: string;
   text: string;

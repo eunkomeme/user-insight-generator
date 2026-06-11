@@ -85,6 +85,7 @@ def run_groq_chunked_qualitative_analysis(
     project_context: dict[str, Any] | None = None,
     fallback_api_key: str = "",
     fallback_model: str = "",
+    memory_context: str = "",
 ) -> AnalysisResult:
     included = [segment for segment in segments if segment.include_in_analysis and segment.content.strip()]
     if not included:
@@ -99,6 +100,7 @@ def run_groq_chunked_qualitative_analysis(
             provider_name="Groq",
             timeout_seconds=timeout_seconds,
             project_context=project_context,
+            memory_context=memory_context,
             max_retries=0,
         )
     except ProviderRateLimitError:
@@ -112,6 +114,7 @@ def run_groq_chunked_qualitative_analysis(
             provider_name="OpenRouter",
             timeout_seconds=timeout_seconds,
             project_context=project_context,
+            memory_context=memory_context,
             max_retries=1,
         )
 
@@ -124,6 +127,7 @@ def _run_chunked_with_provider(
     provider_name: ProviderName,
     timeout_seconds: int,
     project_context: dict[str, Any] | None,
+    memory_context: str = "",
     max_retries: int = 0,
 ) -> AnalysisResult:
     chunks = _chunk_segments(included, chunk_size=get_analysis_chunk_size())
@@ -152,7 +156,7 @@ def _run_chunked_with_provider(
         endpoint=endpoint,
         provider_name=provider_name,
         system_prompt=_system_prompt(),
-        user_prompt=_synthesis_prompt(chunk_results, included, project_context),
+        user_prompt=_synthesis_prompt(chunk_results, included, project_context, memory_context),
         timeout_seconds=timeout_seconds,
         max_tokens=get_analysis_synthesis_max_tokens(),
         max_retries=max_retries,
@@ -249,7 +253,8 @@ def _system_prompt() -> str:
 - 인사이트로 승격하려면 반복성, 맥락/행동/감정 연결, 구조적 원인 설명, 설계 영향, 근거 추적 가능성을 확인하세요.
 - 확실하지 않은 해석은 confidence를 보통 또는 낮음으로 표시하세요.
 - 권장 조치는 "개선해야 한다"로 끝내지 말고 개선 대상, 사용 맥락, 구체적 UI/기능/안내/자동화, 우선순위, 예상 효과, 검증 방법 중 최소 3개 이상을 포함하세요.
-- evidence_segment_ids에는 반드시 제공된 segment id만 넣으세요.
+- supporting_quotes.source_id에는 반드시 제공된 segment id만 넣으세요.
+- status는 초안 상태인 "draft"로 반환하세요.
 - 근거 없는 결론은 만들지 마세요.
 - 출력은 JSON만 반환하세요. 마크다운, 설명문, 코드블록은 금지입니다.
 """.strip()
@@ -282,33 +287,26 @@ def _user_prompt(segments: list[Segment], project_context: dict[str, Any] | None
 
 반환 JSON 스키마:
 {{
-  "keywords": [
-    {{"keyword": "string", "count": 1}}
-  ],
-  "topics": [
-    {{
-      "id": "topic_001",
-      "topic_name": "string",
-      "keywords": ["string"],
-      "summary": "이 주제가 무엇을 의미하는지 1-2문장",
-      "segment_ids": ["seg_0001"],
-      "participant_count": 1
-    }}
-  ],
   "insights": [
     {{
       "id": "insight_001",
+      "type": "pain_point|usability_issue|positive_signal|task_friction",
       "title": "리서처가 바로 이해할 수 있는 한 줄 결론",
       "summary": "이 결론이 왜 나왔는지, 어떤 행동/맥락에서 반복되는지 2-3문장",
-      "interpretation": "표면 발화 너머의 구조적 해석",
-      "why_it_matters": "이 인사이트가 제품/서비스 의사결정에 중요한 이유",
-      "product_implication": "제품 구조, 정보구조, 기능, 정책, 운영에 주는 함의",
-      "recommendation": "제품/UX 관점에서 바로 검토할 제안 1-2문장",
-      "topic_ids": ["topic_001"],
-      "evidence_segment_ids": ["seg_0001"],
-      "participants": ["P1"],
+      "severity": "높음|보통|낮음",
+      "frequency": "높음|보통|낮음",
       "confidence": "높음|보통|낮음",
-      "status": "초안"
+      "related_tasks": ["태스크명 또는 질문/주제"],
+      "related_participants": ["P1"],
+      "supporting_quotes": [
+        {{
+          "quote": "근거 발화 원문 일부",
+          "participant": "P1",
+          "source_id": "seg_0001"
+        }}
+      ],
+      "recommendation": "제품/UX 관점에서 바로 검토할 제안 1-2문장",
+      "status": "draft"
     }}
   ],
   "participant_mentions": {{"P1": 3}}
@@ -316,15 +314,14 @@ def _user_prompt(segments: list[Segment], project_context: dict[str, Any] | None
 
 작성 기준:
 - insights는 3-6개로 제한하세요.
+- type은 pain_point, usability_issue, positive_signal, task_friction 중 하나만 사용하세요.
 - title은 관찰 요약이 아니라 구조적 결론이어야 합니다.
 - summary에는 표면 발화와 구체적 맥락을 함께 쓰세요.
-- interpretation에는 사용자가 직접 말하지 않은 기대, 불안, 판단 기준, 긴장 구조를 설명하세요.
-- why_it_matters에는 이 문제가 의사결정에 왜 중요한지 쓰세요.
-- product_implication에는 제품/서비스 구조에 주는 함의를 쓰세요.
+- severity는 제품/과업 영향도 기준으로, frequency는 참여자 반복 빈도 기준으로 판단하세요.
+- supporting_quotes는 1-3개로 제한하고 quote, participant, source_id를 모두 채우세요.
 - recommendation은 기능명 나열이 아니라 개선 대상, 사용 맥락, 구체적 조치, 예상 효과 또는 검증 방법을 포함하세요.
-- topics는 insights보다 더 넓은 주제 묶음입니다.
-- keywords는 명사/구 중심으로 10-20개 뽑으세요.
-- evidence_segment_ids에는 아래 원문에 포함된 id만 넣으세요.
+- supporting_quotes.source_id에는 아래 원문에 포함된 id만 넣으세요.
+- status는 항상 draft로 반환하세요.
 
 인터뷰 원문:
 {json.dumps(compact_segments, ensure_ascii=False)}
@@ -387,12 +384,11 @@ def _chunk_prompt(chunk: list[Segment], chunk_index: int, total_chunks: int) -> 
 반환 JSON:
 {{
   "chunk_index": {chunk_index},
-  "keywords": [{{"keyword": "string", "count": 1}}],
   "observations": [
     {{
       "title": "관찰명",
       "summary": "무엇이 반복되거나 의미 있는지",
-      "evidence_segment_ids": ["seg_0001"],
+      "source_ids": ["seg_0001"],
       "participants": ["P1"]
     }}
   ],
@@ -409,7 +405,7 @@ def _chunk_prompt(chunk: list[Segment], chunk_index: int, total_chunks: int) -> 
 """.strip()
 
 
-def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segment], project_context: dict[str, Any] | None = None) -> str:
+def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segment], project_context: dict[str, Any] | None = None, memory_context: str = "") -> str:
     referenced_ids = _collect_referenced_segment_ids(chunk_results)
     if not referenced_ids:
         referenced_ids = [segment.id for segment in segments[:30]]
@@ -425,39 +421,33 @@ def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segmen
     }
     compact_chunk_results = _compact_chunk_results(chunk_results)
     context_block = _build_context_block(project_context)
+    memory_block = (memory_context.strip() + "\n\n") if memory_context.strip() else ""
     return f"""
-{context_block}아래는 긴 인터뷰를 여러 묶음으로 나눠 1차 분석한 결과입니다.
+{memory_block}{context_block}아래는 긴 인터뷰를 여러 묶음으로 나눠 1차 분석한 결과입니다.
 이 결과를 통합해 리서처가 바로 읽을 수 있는 최종 UX 리서치 분석 JSON을 만드세요.
 
 반환 JSON 스키마:
 {{
-  "keywords": [
-    {{"keyword": "string", "count": 1}}
-  ],
-  "topics": [
-    {{
-      "id": "topic_001",
-      "topic_name": "string",
-      "keywords": ["string"],
-      "summary": "이 주제가 무엇을 의미하는지 1-2문장",
-      "segment_ids": ["seg_0001"],
-      "participant_count": 1
-    }}
-  ],
   "insights": [
     {{
       "id": "insight_001",
+      "type": "pain_point|usability_issue|positive_signal|task_friction",
       "title": "리서처가 바로 이해할 수 있는 한 줄 결론",
       "summary": "이 결론이 왜 나왔는지, 어떤 행동/맥락에서 반복되는지 2-3문장",
-      "interpretation": "표면 발화 너머의 구조적 해석",
-      "why_it_matters": "이 인사이트가 제품/서비스 의사결정에 중요한 이유",
-      "product_implication": "제품 구조, 정보구조, 기능, 정책, 운영에 주는 함의",
-      "recommendation": "제품/UX 관점에서 바로 검토할 제안 1-2문장",
-      "topic_ids": ["topic_001"],
-      "evidence_segment_ids": ["seg_0001"],
-      "participants": ["P1"],
+      "severity": "높음|보통|낮음",
+      "frequency": "높음|보통|낮음",
       "confidence": "높음|보통|낮음",
-      "status": "초안"
+      "related_tasks": ["태스크명 또는 질문/주제"],
+      "related_participants": ["P1"],
+      "supporting_quotes": [
+        {{
+          "quote": "근거 발화 원문 일부",
+          "participant": "P1",
+          "source_id": "seg_0001"
+        }}
+      ],
+      "recommendation": "제품/UX 관점에서 바로 검토할 제안 1-2문장",
+      "status": "draft"
     }}
   ],
   "participant_mentions": {{"P1": 3}}
@@ -465,12 +455,14 @@ def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segmen
 
 작성 기준:
 - insights는 3-6개.
+- type은 pain_point, usability_issue, positive_signal, task_friction 중 하나만 사용하세요.
 - 사용자의 진짜 맥락과 행동을 설명하세요.
 - title은 관찰 요약이 아니라 구조적 결론이어야 합니다.
-- interpretation에는 숨은 기대/불안/판단 기준과 제품 구조 간극을 설명하세요.
-- why_it_matters와 product_implication을 반드시 작성하세요.
+- severity는 제품/과업 영향도 기준으로, frequency는 참여자 반복 빈도 기준으로 판단하세요.
+- supporting_quotes는 1-3개로 제한하고 quote, participant, source_id를 모두 채우세요.
 - recommendation은 개선 대상, 사용 맥락, 구체적 조치, 예상 효과 또는 검증 방법을 포함하세요.
-- evidence_segment_ids에는 evidence_lookup에 있는 id만 넣으세요.
+- supporting_quotes.source_id에는 evidence_lookup에 있는 id만 넣으세요.
+- status는 항상 draft로 반환하세요.
 
 1차 분석 결과:
 {json.dumps(compact_chunk_results, ensure_ascii=False)}
@@ -484,6 +476,7 @@ def _collect_referenced_segment_ids(chunk_results: list[dict[str, Any]]) -> list
     ids: list[str] = []
     for result in chunk_results:
         for observation in result.get("observations", []):
+            ids.extend(str(segment_id) for segment_id in observation.get("source_ids", []))
             ids.extend(str(segment_id) for segment_id in observation.get("evidence_segment_ids", []))
         for quote in result.get("notable_quotes", []):
             segment_id = quote.get("segment_id")
@@ -502,12 +495,11 @@ def _compact_chunk_results(chunk_results: list[dict[str, Any]]) -> list[dict[str
         compact.append(
             {
                 "chunk_index": result.get("chunk_index"),
-                "keywords": result.get("keywords", [])[:8],
                 "observations": [
                     {
                         "title": str(observation.get("title", ""))[:80],
                         "summary": str(observation.get("summary", ""))[:220],
-                        "evidence_segment_ids": observation.get("evidence_segment_ids", [])[:4],
+                        "source_ids": (observation.get("source_ids") or observation.get("evidence_segment_ids") or [])[:4],
                         "participants": observation.get("participants", [])[:8],
                     }
                     for observation in result.get("observations", [])[:4]
@@ -582,50 +574,80 @@ def _escape_raw_newlines_inside_strings(content: str) -> str:
 
 
 def _normalize_result(data: dict[str, Any], segments: list[Segment]) -> dict[str, Any]:
-    segment_ids = {segment.id for segment in segments}
+    segment_by_id = {segment.id: segment for segment in segments}
+    allowed_types = {"pain_point", "usability_issue", "positive_signal", "task_friction"}
+    allowed_levels = {"높음", "보통", "낮음"}
+    allowed_statuses = {"draft", "approved", "rejected", "merged"}
 
-    topics = []
-    for index, raw_topic in enumerate(data.get("topics", []), start=1):
-        raw_ids = [str(segment_id) for segment_id in raw_topic.get("segment_ids", [])]
-        filtered_ids = [segment_id for segment_id in raw_ids if segment_id in segment_ids]
-        topics.append(
-            {
-                "id": str(raw_topic.get("id") or f"topic_{index:03d}"),
-                "topic_name": str(raw_topic.get("topic_name") or "분류되지 않은 주제"),
-                "keywords": [str(keyword) for keyword in raw_topic.get("keywords", [])][:8],
-                "summary": str(raw_topic.get("summary") or ""),
-                "segment_ids": filtered_ids,
-                "participant_count": int(raw_topic.get("participant_count") or 0),
-            }
-        )
-
-    topic_ids = {topic["id"] for topic in topics}
     insights = []
     for index, raw_insight in enumerate(data.get("insights", []), start=1):
-        raw_evidence_ids = [str(segment_id) for segment_id in raw_insight.get("evidence_segment_ids", [])]
-        filtered_evidence_ids = [segment_id for segment_id in raw_evidence_ids if segment_id in segment_ids]
-        raw_topic_ids = [str(topic_id) for topic_id in raw_insight.get("topic_ids", [])]
-        filtered_topic_ids = [topic_id for topic_id in raw_topic_ids if topic_id in topic_ids]
+        raw_quotes = raw_insight.get("supporting_quotes") or []
+        if not raw_quotes and raw_insight.get("evidence_segment_ids"):
+            raw_quotes = [{"source_id": segment_id} for segment_id in raw_insight.get("evidence_segment_ids", [])]
+
+        supporting_quotes = []
+        for raw_quote in raw_quotes:
+            source_id = str(raw_quote.get("source_id") or raw_quote.get("segment_id") or "")
+            source_segment = segment_by_id.get(source_id)
+            if not source_segment:
+                continue
+            quote_text = str(raw_quote.get("quote") or source_segment.content[:220])
+            participant = str(raw_quote.get("participant") or source_segment.participant)
+            supporting_quotes.append(
+                {
+                    "quote": quote_text[:500],
+                    "participant": participant,
+                    "source_id": source_id,
+                }
+            )
+            if len(supporting_quotes) >= 3:
+                break
+
+        related_participants = [
+            str(participant)
+            for participant in raw_insight.get("related_participants", raw_insight.get("participants", []))
+            if str(participant).strip()
+        ]
+        if not related_participants:
+            related_participants = sorted({quote["participant"] for quote in supporting_quotes if quote["participant"]})
+
+        related_tasks = [
+            str(task)
+            for task in raw_insight.get("related_tasks", [])
+            if str(task).strip()
+        ]
+        if not related_tasks:
+            related_tasks = sorted(
+                {
+                    segment_by_id[quote["source_id"]].question_or_topic
+                    for quote in supporting_quotes
+                    if quote["source_id"] in segment_by_id and segment_by_id[quote["source_id"]].question_or_topic != "질문 미확인"
+                }
+            )
+
+        insight_type = str(raw_insight.get("type") or "usability_issue")
+        severity = str(raw_insight.get("severity") or "보통")
+        frequency = str(raw_insight.get("frequency") or "보통")
+        confidence = str(raw_insight.get("confidence") or "보통")
+        status = str(raw_insight.get("status") or "draft")
         insights.append(
             {
                 "id": str(raw_insight.get("id") or f"insight_{index:03d}"),
+                "type": insight_type if insight_type in allowed_types else "usability_issue",
                 "title": str(raw_insight.get("title") or "추가 검토가 필요한 인사이트"),
                 "summary": str(raw_insight.get("summary") or ""),
+                "severity": severity if severity in allowed_levels else "보통",
+                "frequency": frequency if frequency in allowed_levels else "보통",
+                "confidence": confidence if confidence in allowed_levels else "보통",
+                "related_tasks": related_tasks,
+                "related_participants": related_participants,
+                "supporting_quotes": supporting_quotes,
                 "recommendation": str(raw_insight.get("recommendation") or "후속 검토가 필요합니다."),
-                "interpretation": str(raw_insight.get("interpretation") or ""),
-                "why_it_matters": str(raw_insight.get("why_it_matters") or ""),
-                "product_implication": str(raw_insight.get("product_implication") or ""),
-                "topic_ids": filtered_topic_ids,
-                "evidence_segment_ids": filtered_evidence_ids,
-                "participants": [str(participant) for participant in raw_insight.get("participants", [])],
-                "confidence": str(raw_insight.get("confidence") or "보통"),
-                "status": str(raw_insight.get("status") or "초안"),
+                "status": status if status in allowed_statuses else "draft",
             }
         )
 
     return {
-        "keywords": data.get("keywords", []),
-        "topics": topics,
         "insights": insights,
         "participant_mentions": data.get("participant_mentions", {}),
     }

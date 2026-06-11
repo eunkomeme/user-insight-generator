@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -9,13 +8,10 @@ from core.intake import Segment
 
 
 @dataclass
-class TopicCluster:
-    id: str
-    topic_name: str
-    keywords: list[str]
-    summary: str
-    segment_ids: list[str]
-    participant_count: int
+class SupportingQuote:
+    quote: str
+    participant: str
+    source_id: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -24,33 +20,32 @@ class TopicCluster:
 @dataclass
 class InsightDraft:
     id: str
+    type: str
     title: str
     summary: str
-    recommendation: str
-    topic_ids: list[str]
-    evidence_segment_ids: list[str]
-    participants: list[str]
+    severity: str
+    frequency: str
     confidence: str
+    related_tasks: list[str]
+    related_participants: list[str]
+    supporting_quotes: list[SupportingQuote]
+    recommendation: str
     status: str
-    interpretation: str = ""
-    why_it_matters: str = ""
-    product_implication: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            **asdict(self),
+            "supporting_quotes": [quote.to_dict() for quote in self.supporting_quotes],
+        }
 
 
 @dataclass
 class AnalysisResult:
-    keywords: list[dict[str, Any]]
-    topics: list[TopicCluster]
     insights: list[InsightDraft]
     participant_mentions: dict[str, int]
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "keywords": self.keywords,
-            "topics": [topic.to_dict() for topic in self.topics],
             "insights": [insight.to_dict() for insight in self.insights],
             "participant_mentions": self.participant_mentions,
         }
@@ -58,51 +53,33 @@ class AnalysisResult:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AnalysisResult":
         return cls(
-            keywords=list(data.get("keywords", [])),
-            topics=[TopicCluster(**item) for item in data.get("topics", [])],
             insights=[
                 InsightDraft(
                     id=item.get("id", ""),
+                    type=item.get("type", "usability_issue"),
                     title=item.get("title", ""),
                     summary=item.get("summary", ""),
-                    recommendation=item.get("recommendation", "후속 검토가 필요합니다."),
-                    interpretation=item.get("interpretation", ""),
-                    why_it_matters=item.get("why_it_matters", ""),
-                    product_implication=item.get("product_implication", ""),
-                    topic_ids=item.get("topic_ids", []),
-                    evidence_segment_ids=item.get("evidence_segment_ids", []),
-                    participants=item.get("participants", []),
+                    severity=item.get("severity", "보통"),
+                    frequency=item.get("frequency", "보통"),
                     confidence=item.get("confidence", "보통"),
-                    status=item.get("status", "초안"),
+                    related_tasks=list(item.get("related_tasks", [])),
+                    related_participants=list(item.get("related_participants", [])),
+                    supporting_quotes=[
+                        SupportingQuote(
+                            quote=quote.get("quote", ""),
+                            participant=quote.get("participant", ""),
+                            source_id=quote.get("source_id", ""),
+                        )
+                        for quote in item.get("supporting_quotes", [])
+                    ],
+                    recommendation=item.get("recommendation", "후속 검토가 필요합니다."),
+                    status=item.get("status", "draft"),
                 )
                 for item in data.get("insights", [])
             ],
             participant_mentions=dict(data.get("participant_mentions", {})),
         )
 
-
-STOPWORDS = {
-    "그리고",
-    "그런데",
-    "그래서",
-    "하지만",
-    "사용자",
-    "참여자",
-    "인터뷰",
-    "질문",
-    "답변",
-    "생각",
-    "느낌",
-    "부분",
-    "화면",
-    "기능",
-    "서비스",
-    "합니다",
-    "했어요",
-    "같아요",
-    "있어요",
-    "없어요",
-}
 
 TOPIC_RULES = [
     ("과정 중심의 사용 맥락", {"요리", "저녁", "준비", "과정", "흐름", "가족", "재료", "레시피"}),
@@ -166,51 +143,32 @@ INSIGHT_LIBRARY = {
 
 def run_mock_qualitative_analysis(segments: list[Segment]) -> AnalysisResult:
     included = [segment for segment in segments if segment.include_in_analysis and segment.content.strip()]
-    keywords = _extract_keywords(included)
     topics = _cluster_segments(included)
     insights = _draft_insights(topics, included)
     participant_mentions = Counter(segment.participant for segment in included)
     return AnalysisResult(
-        keywords=keywords,
-        topics=topics,
         insights=insights,
         participant_mentions=dict(participant_mentions),
     )
 
 
-def _extract_keywords(segments: list[Segment]) -> list[dict[str, Any]]:
-    counter: Counter[str] = Counter()
-    for segment in segments:
-        tokens = re.findall(r"[가-힣A-Za-z0-9]{2,}", segment.content)
-        for token in tokens:
-            normalized = token.lower()
-            if normalized not in STOPWORDS and len(normalized) >= 2:
-                counter[normalized] += 1
-    return [{"keyword": keyword, "count": count} for keyword, count in counter.most_common(20)]
-
-
-def _cluster_segments(segments: list[Segment]) -> list[TopicCluster]:
+def _cluster_segments(segments: list[Segment]) -> list[dict[str, Any]]:
     grouped: dict[str, list[Segment]] = defaultdict(list)
     for segment in segments:
         topic_name = _match_topic(segment.content)
         grouped[topic_name].append(segment)
 
-    clusters: list[TopicCluster] = []
+    clusters: list[dict[str, Any]] = []
     for index, (topic_name, topic_segments) in enumerate(grouped.items(), start=1):
-        topic_keywords = _extract_topic_keywords(topic_segments)
         participants = {segment.participant for segment in topic_segments}
-        clusters.append(
-            TopicCluster(
-                id=f"topic_{index:03d}",
-                topic_name=topic_name,
-                keywords=topic_keywords,
-                summary=_topic_summary(topic_name, topic_segments),
-                segment_ids=[segment.id for segment in topic_segments],
-                participant_count=len(participants),
-            )
-        )
+        clusters.append({
+            "id": f"topic_{index:03d}",
+            "topic_name": topic_name,
+            "segment_ids": [segment.id for segment in topic_segments],
+            "participant_count": len(participants),
+        })
 
-    return sorted(clusters, key=lambda topic: len(topic.segment_ids), reverse=True)
+    return sorted(clusters, key=lambda topic: len(topic["segment_ids"]), reverse=True)
 
 
 def _match_topic(content: str) -> str:
@@ -220,35 +178,37 @@ def _match_topic(content: str) -> str:
     return "기타 반복 패턴"
 
 
-def _extract_topic_keywords(segments: list[Segment]) -> list[str]:
-    keyword_counts = _extract_keywords(segments)
-    return [item["keyword"] for item in keyword_counts[:5]]
-
-
-def _topic_summary(topic_name: str, segments: list[Segment]) -> str:
-    base = INSIGHT_LIBRARY.get(topic_name, INSIGHT_LIBRARY["기타 반복 패턴"])
-    return f"{base['summary']} 관련 발화는 {len(segments)}건, 참여자는 {len({segment.participant for segment in segments})}명입니다."
-
-
-def _draft_insights(topics: list[TopicCluster], segments: list[Segment]) -> list[InsightDraft]:
+def _draft_insights(topics: list[dict[str, Any]], segments: list[Segment]) -> list[InsightDraft]:
     segment_by_id = {segment.id: segment for segment in segments}
     insights: list[InsightDraft] = []
     for index, topic in enumerate(topics[:5], start=1):
-        evidence_segments = [segment_by_id[segment_id] for segment_id in topic.segment_ids[:3] if segment_id in segment_by_id]
+        segment_ids = topic["segment_ids"]
+        evidence_segments = [segment_by_id[segment_id] for segment_id in segment_ids[:3] if segment_id in segment_by_id]
         participants = sorted({segment.participant for segment in evidence_segments})
-        confidence = "높음" if topic.participant_count >= 3 else "보통" if topic.participant_count >= 2 else "낮음"
-        insight_copy = INSIGHT_LIBRARY.get(topic.topic_name, INSIGHT_LIBRARY["기타 반복 패턴"])
+        participant_count = int(topic["participant_count"])
+        confidence = "높음" if participant_count >= 3 else "보통" if participant_count >= 2 else "낮음"
+        insight_copy = INSIGHT_LIBRARY.get(topic["topic_name"], INSIGHT_LIBRARY["기타 반복 패턴"])
         insights.append(
             InsightDraft(
                 id=f"insight_{index:03d}",
+                type="positive_signal" if topic["topic_name"] == "긍정 신호" else "usability_issue",
                 title=insight_copy["title"],
                 summary=insight_copy["summary"],
-                recommendation=insight_copy["recommendation"],
-                topic_ids=[topic.id],
-                evidence_segment_ids=[segment.id for segment in evidence_segments],
-                participants=participants,
+                severity="높음" if participant_count >= 3 else "보통" if participant_count >= 2 else "낮음",
+                frequency="높음" if participant_count >= 3 else "보통" if participant_count >= 2 else "낮음",
                 confidence=confidence,
-                status="초안",
+                related_tasks=sorted({segment.question_or_topic for segment in evidence_segments if segment.question_or_topic != "질문 미확인"}),
+                related_participants=participants,
+                supporting_quotes=[
+                    SupportingQuote(
+                        quote=segment.content[:180],
+                        participant=segment.participant,
+                        source_id=segment.id,
+                    )
+                    for segment in evidence_segments
+                ],
+                recommendation=insight_copy["recommendation"],
+                status="draft",
             )
         )
     return insights
