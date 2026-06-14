@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BadgeCheck,
-  CheckCircle2,
   ChevronDown,
   CircleSlash,
   ClipboardCheck,
@@ -15,14 +14,11 @@ import {
   FileUp,
   FolderOpen,
   FolderPlus,
-  Layers3,
   Loader2,
-  MessageSquareText,
   Network,
   Sparkles,
   TableProperties,
   Trash2,
-  Wand2
 } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
@@ -44,10 +40,13 @@ import type {
   Segment,
   SourceRecord,
   TabularPreviewResponse,
-  Topic,
 } from "../lib/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  (typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : "http://localhost:8000");
 const DRAFT_STORAGE_KEY = "cxi-studio:draft:v1";
 type WorkspaceTab = "sources" | "findings" | "synthesis" | "report";
 
@@ -91,12 +90,10 @@ export default function Home() {
   const [segmentTopicOverrides, setSegmentTopicOverrides] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [analysisStageIndex, setAnalysisStageIndex] = useState(0);
-  const [recognizing, setRecognizing] = useState(false);
   const [error, setError] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("sources");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const recognitionResultRef = useRef<HTMLDivElement | null>(null);
   const draftRestoredRef = useRef(false);
   const suppressNextSaveRef = useRef(false);
 
@@ -122,8 +119,7 @@ export default function Home() {
   );
   const attentionCount = reviewedInsights.filter((i) => i.findingStatus === "needs_attention").length;
   const autoIncludedCount = reviewedInsights.filter((i) => i.findingStatus === "auto_included").length;
-  const canRecognize = inputMode === "file" ? Boolean(file) : Boolean(text.trim());
-  const canAnalyze = Boolean(recognition && (inputMode === "file" ? file : text.trim()));
+  const canAnalyze = inputMode === "text" && Boolean(text.trim());
   const reportMarkdown = useMemo(
     () => buildReportMarkdown(projectName, recognition, result, reportInsights, segmentById),
     [projectName, recognition, result, reportInsights, segmentById]
@@ -340,51 +336,33 @@ export default function Home() {
     return { findingStatus: "auto_included", riskFlags: [] };
   }
 
-  async function recognize(selectedFile = file) {
-    setRecognizing(true);
-    setError("");
-    setResult(null);
-    setReviewedInsights([]);
-    setSegmentTopicOverrides({});
-    setRecognition(null);
-    try {
-      const response = inputMode === "file" && selectedFile ? await recognizeFile(selectedFile) : await recognizeText();
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail ?? "자료 인식에 실패했습니다.");
-      }
-      setRecognition(data);
-      setWorkspaceTab("sources");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "자료 인식 중 오류가 발생했습니다.");
-    } finally {
-      setRecognizing(false);
-      // 인식 결과 영역으로 자동 스크롤
-      setTimeout(() => {
-        recognitionResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 150);
-    }
-  }
-
-  async function analyze() {
+  async function runAnalysis(selectedFile = file) {
     setLoading(true);
     setAnalysisStageIndex(0);
     setError("");
     setResult(null);
     setReviewedInsights([]);
     setSegmentTopicOverrides({});
+    setRecognition(null);
     const stageTimer = window.setInterval(() => {
       setAnalysisStageIndex((current) => Math.min(current + 1, analysisStages.length - 1));
     }, 2500);
     try {
-      const response = inputMode === "file" && file ? await analyzeFile(file) : await analyzeText();
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(formatErrorMessage(data.detail ?? "분석 요청에 실패했습니다."));
-      }
-      setResult(data);
+      const parseResponse = inputMode === "file" && selectedFile
+        ? await recognizeFile(selectedFile)
+        : await recognizeText();
+      const parseData = await parseResponse.json();
+      if (!parseResponse.ok) throw new Error(parseData.detail ?? "자료 인식에 실패했습니다.");
+      setRecognition(parseData);
+
+      const analyzeResponse = inputMode === "file" && selectedFile
+        ? await analyzeFile(selectedFile)
+        : await analyzeText();
+      const analyzeData = await analyzeResponse.json();
+      if (!analyzeResponse.ok) throw new Error(formatErrorMessage(analyzeData.detail ?? "분석 요청에 실패했습니다."));
+      setResult(analyzeData);
       setReviewedInsights(
-        data.analysis.insights.map((insight: Insight) => ({
+        analyzeData.analysis.insights.map((insight: Insight) => ({
           ...insight,
           ...assignFindingStatus(insight),
         }))
@@ -573,7 +551,7 @@ export default function Home() {
       setSourceName(selectedFile.name);
       void previewTabularFile(selectedFile);
       void uploadSourceToLibrary(selectedFile);
-      recognize(selectedFile);
+      void runAnalysis(selectedFile);
     }
   }
 
@@ -656,119 +634,103 @@ export default function Home() {
             sourceCount={sources.length}
           />
 
-          <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="grid min-w-0 gap-5">
-              <AnimatePresence mode="popLayout">
-                {workspaceTab === "sources" ? (
-                  <MotionBlock key="evidence">
-                    <div className="grid gap-5">
-                      <InputPanel
-                        canRecognize={canRecognize}
-                        columnMappings={columnMappings}
-                        file={file}
-                        fileInputRef={fileInputRef}
-                        inputMode={inputMode}
-                        onFileChange={handleFileChange}
-                        onMappingChange={(column, field) =>
-                          setColumnMappings((current) => ({
-                            ...current,
-                            [column]: field
-                          }))
-                        }
-                        onModeChange={changeInputMode}
-                        onRecognize={() => recognize()}
-                        previewingTabular={previewingTabular}
-                        projectName={projectName}
-                        researchGoal={researchGoal}
-                        recognizing={recognizing}
-                        setEvaluationCriteriaText={setEvaluationCriteriaText}
-                        setProjectName={setProjectName}
-                        setResearchGoal={setResearchGoal}
-                        setSourceName={setSourceName}
-                        setTasksText={setTasksText}
-                        setText={setText}
-                        sourceName={sourceName}
-                        tabularPreview={tabularPreview}
-                        tasksText={tasksText}
-                        text={text}
-                        evaluationCriteriaText={evaluationCriteriaText}
-                      />
-                      <SourceLibraryPanel
-                        activeSourceId={selectedSourceId}
-                        analysisStage={analysisStages[analysisStageIndex]}
-                        loading={loading}
-                        onAnalyzeSource={analyzeLibrarySource}
-                        onDeleteSource={deleteLibrarySource}
-                        onSelectSource={setSelectedSourceId}
-                        sources={sources}
-                      />
-                      <div ref={recognitionResultRef}>
-                        {recognition ? <RecognitionPanel recognition={recognition} /> : null}
-                        {!result ? (
-                          <EmptyAnalysisState analysisStage={analysisStages[analysisStageIndex]} canAnalyze={canAnalyze} loading={loading} onAnalyze={analyze} />
-                        ) : null}
-                      </div>
-                    </div>
-                  </MotionBlock>
-                ) : null}
-
-                {error ? (
-                  <MotionBlock key="error">
-                    <div className="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm font-medium text-rose-800">
-                      {error}
-                    </div>
-                  </MotionBlock>
-                ) : null}
-
-                {workspaceTab === "findings" ? (
-                  <MotionBlock key="insights">
-                    {result ? (
-                      <FindingsWorkspace
-                        attentionCount={attentionCount}
-                        onMoveSegment={(segmentId, topicId) =>
-                          setSegmentTopicOverrides((current) => ({
-                            ...current,
-                            [segmentId]: topicId
-                          }))
-                        }
-                        onUpdateInsight={updateInsight}
-                        reportInsights={reportInsights}
-                        result={result}
-                        reviewedInsights={reviewedInsights}
-                        segmentById={segmentById}
-                        segmentTopicOverrides={segmentTopicOverrides}
-                      />
-                    ) : (
-                      <EmptyAnalysisState analysisStage={analysisStages[analysisStageIndex]} canAnalyze={canAnalyze} loading={loading} onAnalyze={analyze} />
-                    )}
-                  </MotionBlock>
-                ) : null}
-
-                {workspaceTab === "report" && result ? (
-                  <MotionBlock key="report">
-                    <ReportPanel
-                      attentionCount={attentionCount}
-                      reportInsights={reportInsights}
-                      onDownload={() => downloadMarkdown(reportMarkdown)}
-                      recognition={recognition}
-                      reportMarkdown={reportMarkdown}
-                      result={result}
+          <div className="mt-6">
+            <AnimatePresence mode="popLayout">
+              {workspaceTab === "sources" ? (
+                <MotionBlock key="sources">
+                  <div className="grid gap-5">
+                    <InputPanel
+                      canAnalyze={canAnalyze}
+                      columnMappings={columnMappings}
+                      evaluationCriteriaText={evaluationCriteriaText}
+                      file={file}
+                      fileInputRef={fileInputRef}
+                      inputMode={inputMode}
+                      loading={loading}
+                      analysisStage={analysisStages[analysisStageIndex]}
+                      onAnalyze={() => runAnalysis()}
+                      onFileChange={handleFileChange}
+                      onMappingChange={(column, field) =>
+                        setColumnMappings((current) => ({ ...current, [column]: field }))
+                      }
+                      onModeChange={changeInputMode}
+                      previewingTabular={previewingTabular}
+                      projectName={projectName}
+                      researchGoal={researchGoal}
+                      setEvaluationCriteriaText={setEvaluationCriteriaText}
+                      setProjectName={setProjectName}
+                      setResearchGoal={setResearchGoal}
+                      setSourceName={setSourceName}
+                      setTasksText={setTasksText}
+                      setText={setText}
+                      sourceName={sourceName}
+                      tabularPreview={tabularPreview}
+                      tasksText={tasksText}
+                      text={text}
                     />
-                  </MotionBlock>
-                ) : null}
+                    <SourceLibraryPanel
+                      activeSourceId={selectedSourceId}
+                      analysisStage={analysisStages[analysisStageIndex]}
+                      loading={loading}
+                      onAnalyzeSource={analyzeLibrarySource}
+                      onDeleteSource={deleteLibrarySource}
+                      onSelectSource={setSelectedSourceId}
+                      sources={sources}
+                    />
+                  </div>
+                </MotionBlock>
+              ) : null}
 
-                {workspaceTab === "synthesis" ? (
-                  <MotionBlock key="synthesis">
-                    <SynthesisPlaceholder sources={sources} />
-                  </MotionBlock>
-                ) : null}
-              </AnimatePresence>
-            </div>
+              {error ? (
+                <MotionBlock key="error">
+                  <div className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm font-medium text-rose-800">
+                    {error}
+                  </div>
+                </MotionBlock>
+              ) : null}
 
-            <aside className="grid h-fit gap-5">
-              <ActionPanel analysisStage={analysisStages[analysisStageIndex]} canAnalyze={canAnalyze} loading={loading} onAnalyze={analyze} recognition={recognition} result={result} />
-              <SupportPanel result={result} />
-            </aside>
+              {workspaceTab === "findings" ? (
+                <MotionBlock key="findings">
+                  {result ? (
+                    <FindingsWorkspace
+                      attentionCount={attentionCount}
+                      onUpdateInsight={updateInsight}
+                      reviewedInsights={reviewedInsights}
+                      segmentById={segmentById}
+                    />
+                  ) : (
+                    <EmptyState loading={loading} analysisStage={analysisStages[analysisStageIndex]} />
+                  )}
+                </MotionBlock>
+              ) : null}
+
+              {workspaceTab === "report" && result ? (
+                <MotionBlock key="report">
+                  <ReportPanel
+                    attentionCount={attentionCount}
+                    reportInsights={reportInsights}
+                    onDownload={() => downloadMarkdown(reportMarkdown)}
+                    recognition={recognition}
+                    reportMarkdown={reportMarkdown}
+                    result={result}
+                  />
+                </MotionBlock>
+              ) : null}
+
+              {workspaceTab === "synthesis" ? (
+                <MotionBlock key="synthesis">
+                  <SynthesisPanel
+                    onMoveSegment={(segmentId, topicId) =>
+                      setSegmentTopicOverrides((current) => ({ ...current, [segmentId]: topicId }))
+                    }
+                    result={result}
+                    segmentById={segmentById}
+                    segmentTopicOverrides={segmentTopicOverrides}
+                    sources={sources}
+                  />
+                </MotionBlock>
+              ) : null}
+            </AnimatePresence>
           </div>
         </section>
       </div>
@@ -1099,20 +1061,21 @@ function WorkbenchHeader({
 }
 
 function InputPanel({
-  canRecognize,
+  canAnalyze,
   columnMappings,
   evaluationCriteriaText,
   file,
   fileInputRef,
   inputMode,
+  loading,
+  analysisStage,
+  onAnalyze,
   onFileChange,
   onMappingChange,
   onModeChange,
-  onRecognize,
   previewingTabular,
   projectName,
   researchGoal,
-  recognizing,
   setEvaluationCriteriaText,
   setProjectName,
   setResearchGoal,
@@ -1124,20 +1087,21 @@ function InputPanel({
   tasksText,
   text
 }: {
-  canRecognize: boolean;
+  canAnalyze: boolean;
   columnMappings: Record<string, string>;
   evaluationCriteriaText: string;
   file: File | null;
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
   inputMode: "file" | "text";
+  loading: boolean;
+  analysisStage: string;
+  onAnalyze: () => void;
   onFileChange: (file: File | null) => void;
   onMappingChange: (column: string, field: string) => void;
   onModeChange: (mode: "file" | "text") => void;
-  onRecognize: () => void;
   previewingTabular: boolean;
   projectName: string;
   researchGoal: string;
-  recognizing: boolean;
   setEvaluationCriteriaText: (value: string) => void;
   setProjectName: (value: string) => void;
   setResearchGoal: (value: string) => void;
@@ -1149,13 +1113,19 @@ function InputPanel({
   tasksText: string;
   text: string;
 }) {
+  const [contextOpen, setContextOpen] = useState(false);
+
   return (
     <Card>
       <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <SectionKicker icon={<FileUp size={16} />} label="1. 자료 추가" />
+          <SectionKicker icon={<FileUp size={16} />} label="자료 추가" />
           <h3 className="mt-2 text-lg font-black">분석할 원자료를 올려주세요</h3>
-            <p className="mt-1 text-sm leading-6 text-[#6c6a64]">파일을 먼저 올리면 바로 인식합니다. 연구 맥락은 나중에 보완해도 됩니다.</p>
+          <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
+            {inputMode === "file"
+              ? "파일을 올리면 바로 분석을 시작합니다."
+              : "텍스트를 붙여넣고 분석 버튼을 누르세요."}
+          </p>
         </div>
         <Tabs onValueChange={(value) => onModeChange(value as "file" | "text")} value={inputMode}>
           <TabsList>
@@ -1174,30 +1144,12 @@ function InputPanel({
           </Field>
         </div>
 
-        <div className="rounded-3xl border border-[#e6dfd8] bg-[#f5f0e8] p-4">
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-black text-[#141413]">선택 보완 맥락</p>
-            <p className="text-sm leading-6 text-[#6c6a64]">비워도 분석할 수 있습니다. 연구 목적과 태스크를 추가하면 이후 개별 분석과 종합 정확도가 올라갑니다.</p>
-          </div>
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            <Field label="연구 목적">
-              <Textarea className="min-h-28" onChange={(event) => setResearchGoal(event.target.value)} value={researchGoal} />
-            </Field>
-            <Field label="평가 태스크">
-              <Textarea className="min-h-28" onChange={(event) => setTasksText(event.target.value)} value={tasksText} />
-            </Field>
-            <Field label="평가 기준">
-              <Textarea className="min-h-28" onChange={(event) => setEvaluationCriteriaText(event.target.value)} value={evaluationCriteriaText} />
-            </Field>
-          </div>
-        </div>
-
         <Tabs value={inputMode}>
           <TabsContent value="file">
             <div
               className={cn(
                 "group rounded-3xl border border-dashed p-8 transition",
-                file ? "border-[#cc785c] bg-[#efe9de]" : "border-[#e6dfd8] bg-[#f5f0e8] hover:border-[#cc785c] hover:bg-[#faf9f5]"
+                loading ? "border-[#cc785c] bg-[#efe9de]" : file ? "border-[#cc785c] bg-[#efe9de]" : "border-[#e6dfd8] bg-[#f5f0e8] hover:border-[#cc785c] hover:bg-[#faf9f5]"
               )}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
@@ -1215,33 +1167,41 @@ function InputPanel({
               <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-4">
                   <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#faf9f5] text-[#252523] shadow-sm">
-                    <FileText size={22} />
+                    {loading ? <Loader2 className="animate-spin" size={22} /> : <FileText size={22} />}
                   </div>
                   <div>
-                    <p className="text-base font-black text-[#141413]">{file ? file.name : "파일을 끌어오거나 선택하세요"}</p>
-                    <p className="mt-1 text-sm leading-6 text-[#6c6a64]">TXT, Markdown, CSV, XLSX 파일을 지원합니다. 파일을 올리면 이 파일만 분석 대상으로 사용합니다.</p>
+                    <p className="text-base font-black text-[#141413]">
+                      {loading ? analysisStage : file ? file.name : "파일을 끌어오거나 선택하세요"}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
+                      {loading
+                        ? "분석이 완료되면 Report 탭으로 이동합니다."
+                        : "TXT, Markdown, CSV, XLSX 파일을 지원합니다."}
+                    </p>
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button onClick={() => fileInputRef.current?.click()} type="button" variant="secondary">
-                    파일 선택
-                  </Button>
-                  {file ? (
-                    <Button onClick={() => onFileChange(null)} type="button" variant="ghost">
-                      해제
+                {!loading ? (
+                  <div className="flex gap-2">
+                    <Button onClick={() => fileInputRef.current?.click()} type="button" variant="secondary">
+                      파일 선택
                     </Button>
-                  ) : null}
-                </div>
+                    {file ? (
+                      <Button onClick={() => onFileChange(null)} type="button" variant="ghost">
+                        해제
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
-            {file ? (
+            {file && !loading ? (
               <UploadedFileQueue
                 file={file}
                 previewingTabular={previewingTabular}
                 tabularPreview={tabularPreview}
               />
             ) : null}
-            {tabularPreview ? (
+            {tabularPreview && !loading ? (
               <TabularMappingPanel
                 columnMappings={columnMappings}
                 onMappingChange={onMappingChange}
@@ -1250,39 +1210,48 @@ function InputPanel({
             ) : null}
           </TabsContent>
           <TabsContent value="text">
-            <Field label="직접 입력할 원자료">
-              <Textarea
-                className={cn("min-h-64", text.trim() ? "border-[#cc785c] focus-visible:ring-[#cc785c]" : "")}
-                onChange={(event) => setText(event.target.value)}
-                placeholder="인터뷰 발화, 관찰 메모, 설문 응답 텍스트를 여기에 붙여넣으세요"
-                value={text}
-              />
-              <div className="mt-2 flex items-center gap-2">
+            <div className="grid gap-4">
+              <Field label="분석할 원자료">
+                <Textarea
+                  className={cn("min-h-64", text.trim() ? "border-[#cc785c] focus-visible:ring-[#cc785c]" : "")}
+                  onChange={(event) => setText(event.target.value)}
+                  placeholder="인터뷰 발화, 관찰 메모, 설문 응답 텍스트를 여기에 붙여넣으세요"
+                  value={text}
+                />
                 {text.trim() ? (
-                  <>
-                    <span className="rounded-full bg-[#f5f0e8] px-2.5 py-0.5 text-xs font-semibold text-[#6c6a64]">
-                      {text.trim().length.toLocaleString()}자
-                    </span>
-                    <span className="text-xs text-[#6c6a64]">입력됨 · 아래 버튼으로 인식 결과를 확인하세요</span>
-                  </>
-                ) : (
-                  <span className="text-xs text-[#8e8b82]">텍스트를 입력하면 인식 준비 상태로 바뀝니다</span>
-                )}
-              </div>
-            </Field>
+                  <span className="text-xs text-[#8e8b82]">{text.trim().length.toLocaleString()}자</span>
+                ) : null}
+              </Field>
+              <Button className="w-full" disabled={loading || !canAnalyze} onClick={onAnalyze} type="button">
+                {loading ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
+                {loading ? analysisStage : "분석 시작"}
+              </Button>
+            </div>
           </TabsContent>
         </Tabs>
 
-        <div className="flex flex-col gap-3 rounded-2xl bg-[#f5f0e8] p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-bold text-[#252523]">먼저 자료 인식 결과를 확인합니다</p>
-            <p className="mt-1 text-sm text-[#6c6a64]">AI 분석 전에 발화 단위, 참가자, 섹션을 확인할 수 있습니다.</p>
+        <button
+          className="flex items-center gap-2 text-xs font-bold text-[#8e8b82] transition hover:text-[#252523]"
+          onClick={() => setContextOpen((open) => !open)}
+          type="button"
+        >
+          <ChevronDown className={cn("transition-transform", contextOpen && "rotate-180")} size={14} />
+          연구 맥락 입력 (선택사항 — 비워도 분석됩니다)
+        </button>
+
+        {contextOpen ? (
+          <div className="grid gap-4 rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4 lg:grid-cols-3">
+            <Field label="연구 목적">
+              <Textarea className="min-h-28" onChange={(event) => setResearchGoal(event.target.value)} value={researchGoal} />
+            </Field>
+            <Field label="평가 태스크">
+              <Textarea className="min-h-28" onChange={(event) => setTasksText(event.target.value)} value={tasksText} />
+            </Field>
+            <Field label="평가 기준">
+              <Textarea className="min-h-28" onChange={(event) => setEvaluationCriteriaText(event.target.value)} value={evaluationCriteriaText} />
+            </Field>
           </div>
-          <Button disabled={recognizing || !canRecognize} onClick={onRecognize} type="button">
-            {recognizing ? <Loader2 className="animate-spin" size={18} /> : <BadgeCheck size={18} />}
-            자료 인식 결과 확인
-          </Button>
-        </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -1504,64 +1473,14 @@ function TabularMappingPanel({
   );
 }
 
-function RecognitionPanel({ recognition }: { recognition: RecognitionResponse }) {
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader className="bg-[#141413] text-[#faf9f5]">
-        <SectionKicker icon={<Layers3 size={16} />} label="2. 자료 인식 결과" tone="dark" />
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h3 className="text-xl font-black">{recognition.source_name}</h3>
-            <p className="mt-1 text-sm text-[#d9cbbb]">이 자료를 {recognition.source_type} 자료로 인식했습니다.</p>
-          </div>
-          <Badge variant="blue">{recognition.participant_count || "?"}명 참가자</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-5">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="총 발화 단위" value={`${recognition.segment_count}개`} />
-          <MetricCard label="분석 대상 발화" value={`${recognition.participant_utterance_count}개`} />
-          <MetricCard label="진행자 발화" value={`${recognition.moderator_count}개`} />
-          <MetricCard label="섹션/질문" value={`${recognition.topic_count}개`} />
-        </div>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <InfoBox title="인식된 참가자" value={recognition.participants.length ? recognition.participants.join(", ") : "명확히 인식되지 않음"} />
-          <InfoBox title="주요 섹션/질문" value={recognition.topics.length ? recognition.topics.join(", ") : "명확히 인식되지 않음"} />
-        </div>
-        <div className="rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4">
-          <p className="text-sm font-black text-[#141413]">추출 내용 미리보기</p>
-          <div className="mt-3 grid gap-2">
-            {recognition.preview_segments.slice(0, 5).map((segment) => (
-              <p className="rounded-xl bg-[#faf9f5] px-3 py-2 text-sm leading-6 text-[#6c6a64]" key={segment.id}>
-                <strong className="text-[#141413]">{segment.participant}</strong> · {segment.question_or_topic}: {segment.content}
-              </p>
-            ))}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function EmptyAnalysisState({
-  analysisStage,
-  canAnalyze,
-  loading,
-  onAnalyze
-}: {
-  analysisStage: string;
-  canAnalyze: boolean;
-  loading: boolean;
-  onAnalyze: () => void;
-}) {
+function EmptyState({ loading, analysisStage }: { loading: boolean; analysisStage: string }) {
   return (
     <Card className="border-dashed">
       <CardContent className="flex flex-col items-center justify-center py-12 text-center">
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#efe9de] text-[#a9583e]">
-          <Sparkles size={24} />
+          {loading ? <Loader2 className="animate-spin" size={24} /> : <Sparkles size={24} />}
         </div>
-        <h3 className="mt-4 text-lg font-black">분석 결과가 이곳에 정리됩니다</h3>
-        <p className="mt-2 max-w-xl text-sm leading-6 text-[#6c6a64]">자료 인식 후 AI 분석을 시작하면 핵심 결론, 검수 가능한 인사이트, 보고서 초안이 순서대로 생성됩니다.</p>
+        <h3 className="mt-4 text-lg font-black">{loading ? "분석 중입니다" : "분석 결과가 이곳에 정리됩니다"}</h3>
         {loading ? (
           <div className="mt-5 w-full max-w-md rounded-2xl bg-[#f5f0e8] p-4 text-left">
             <p className="text-sm font-bold text-[#252523]">{analysisStage}</p>
@@ -1569,99 +1488,8 @@ function EmptyAnalysisState({
               <motion.div className="h-full rounded-full bg-[#cc785c]" initial={{ width: "12%" }} animate={{ width: "88%" }} transition={{ duration: 2.2, repeat: Infinity, repeatType: "reverse" }} />
             </div>
           </div>
-        ) : null}
-        {canAnalyze ? (
-          <Button className="mt-5" disabled={loading} onClick={onAnalyze}>
-            {loading ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
-            AI 분석 시작
-          </Button>
         ) : (
-          <div className="mt-5 rounded-2xl bg-[#f5f0e8] px-4 py-3 text-sm font-semibold text-[#6c6a64]">
-            먼저 자료를 추가하고 인식 결과를 확인하세요.
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ActionPanel({
-  analysisStage,
-  canAnalyze,
-  loading,
-  onAnalyze,
-  recognition,
-  result
-}: {
-  analysisStage: string;
-  canAnalyze: boolean;
-  loading: boolean;
-  onAnalyze: () => void;
-  recognition: RecognitionResponse | null;
-  result: AnalysisResponse | null;
-}) {
-  return (
-    <Card className="sticky top-6">
-      <CardContent>
-        <SectionKicker icon={<Sparkles size={16} />} label="다음 액션" />
-        <h3 className="mt-3 text-lg font-black">{result ? "인사이트를 검수하세요" : recognition ? "AI 분석을 시작할 수 있습니다" : "자료를 먼저 추가하세요"}</h3>
-        <p className="mt-2 text-sm leading-6 text-[#6c6a64]">
-          {result ? "승인한 인사이트만 보고서 초안에 반영됩니다." : recognition ? "분석은 원자료를 나눠 읽고 근거 발화를 연결합니다." : "파일 업로드 또는 텍스트 입력 후 자료 인식 결과를 확인하세요."}
-        </p>
-        {recognition && !result ? (
-          <Button className="mt-5 w-full" disabled={!canAnalyze || loading} onClick={onAnalyze}>
-            {loading ? <Loader2 className="animate-spin" size={18} /> : <Wand2 size={18} />}
-            {loading ? "인사이트 후보 생성 중" : "AI 분석 시작"}
-          </Button>
-        ) : (
-          <div className="mt-5 rounded-2xl bg-[#f5f0e8] p-4 text-sm font-semibold text-[#6c6a64]">
-            {result ? "검수 카드에서 승인 여부를 결정하세요." : "먼저 자료 인식 결과 확인을 진행하세요."}
-          </div>
-        )}
-        {loading ? (
-          <div className="mt-4 rounded-2xl bg-[#f5f0e8] p-3">
-            <p className="text-xs font-bold text-[#6c6a64]">현재 처리 단계</p>
-            <p className="mt-1 text-sm font-semibold text-[#252523]">{analysisStage}</p>
-          </div>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function SupportPanel({ result }: { result: AnalysisResponse | null }) {
-  const insights = result?.analysis.insights ?? [];
-  return (
-    <Card>
-      <CardHeader>
-        <h3 className="text-sm font-black">보조 탐색</h3>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {result ? (
-          <>
-            <div>
-              <p className="text-xs font-bold text-[#6c6a64]">영향도 분포</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {["높음", "보통", "낮음"].map((level) => (
-                  <Badge key={level} variant="blue">
-                    {level} · {insights.filter((insight) => insight.severity === level).length}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="text-xs font-bold text-[#6c6a64]">관련 태스크</p>
-              <div className="mt-2 grid gap-2">
-                {Array.from(new Set(insights.flatMap((insight) => insight.related_tasks))).slice(0, 4).map((task) => (
-                  <div className="rounded-xl bg-[#f5f0e8] p-3" key={task}>
-                    <p className="text-sm font-bold">{task}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        ) : (
-          <p className="text-sm leading-6 text-[#6c6a64]">분석이 완료되면 영향도와 관련 태스크가 이곳에 표시됩니다.</p>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-[#6c6a64]">Sources 탭에서 파일을 올리거나 텍스트를 입력하면 분석이 시작됩니다.</p>
         )}
       </CardContent>
     </Card>
@@ -1670,22 +1498,14 @@ function SupportPanel({ result }: { result: AnalysisResponse | null }) {
 
 function FindingsWorkspace({
   attentionCount,
-  onMoveSegment,
   onUpdateInsight,
-  reportInsights,
-  result,
   reviewedInsights,
   segmentById,
-  segmentTopicOverrides
 }: {
   attentionCount: number;
-  onMoveSegment: (segmentId: string, topicId: string) => void;
   onUpdateInsight: (insightId: string, updates: Partial<ReviewedInsight>) => void;
-  reportInsights: ReviewedInsight[];
-  result: AnalysisResponse;
   reviewedInsights: ReviewedInsight[];
   segmentById: Map<string, Segment>;
-  segmentTopicOverrides: Record<string, string>;
 }) {
   const [selectedInsightId, setSelectedInsightId] = useState(reviewedInsights[0]?.id ?? "");
   const [filter, setFilter] = useState<"all" | FindingStatus>("all");
@@ -1809,7 +1629,6 @@ function FindingsWorkspace({
         />
       </div>
 
-      <AffinityBoard onMoveSegment={onMoveSegment} result={result} segmentById={segmentById} segmentTopicOverrides={segmentTopicOverrides} />
     </div>
   );
 }
@@ -1894,12 +1713,10 @@ function InsightInspector({
           />
         </Field>
 
-        <div className="grid gap-4 lg:grid-cols-3">
-          {(["severity", "frequency", "confidence"] as const).map((field) => (
-            <Field key={field} label={field === "severity" ? "영향도" : field === "frequency" ? "빈도" : "신뢰도"}>
-              <Input value={insight[field]} onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, findingStatus: "edited" })} />
-            </Field>
-          ))}
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="amber">영향도 {insight.severity}</Badge>
+          <Badge variant="blue">빈도 {insight.frequency}</Badge>
+          <Badge variant="green">신뢰도 {insight.confidence}</Badge>
         </div>
 
         <Field label="개선 제안">
@@ -1937,137 +1754,6 @@ function InsightInspector({
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function InsightReviewCard({
-  index,
-  insight,
-  onUpdateInsight,
-  segmentById
-}: {
-  index: number;
-  insight: ReviewedInsight;
-  onUpdateInsight: (insightId: string, updates: Partial<ReviewedInsight>) => void;
-  segmentById: Map<string, Segment>;
-}) {
-  const evidenceSegmentIds = getEvidenceSegmentIds(insight);
-  const evidencePreview = evidenceSegmentIds
-    .map((segmentId) => segmentById.get(segmentId))
-    .find(Boolean);
-  return (
-    <motion.article
-      className={cn(
-        "rounded-2xl border bg-white p-4 shadow-sm transition",
-        (insight.findingStatus === "auto_included" || insight.findingStatus === "pinned" || insight.findingStatus === "edited") && "border-emerald-200 bg-emerald-50/30",
-        insight.findingStatus === "needs_attention" && "border-amber-200",
-        insight.findingStatus === "hidden" && "border-slate-200 opacity-65"
-      )}
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2, delay: index * 0.03 }}
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">{index + 1}</span>
-          <Badge variant={(insight.findingStatus === "auto_included" || insight.findingStatus === "pinned") ? "green" : insight.findingStatus === "hidden" ? "muted" : "amber"}>
-            {insight.findingStatus === "auto_included" ? "자동 반영" : insight.findingStatus === "needs_attention" ? "확인 필요" : insight.findingStatus === "pinned" ? "고정" : insight.findingStatus === "edited" ? "수정됨" : "숨김"}
-          </Badge>
-        </div>
-        <div className="flex gap-1 rounded-xl bg-slate-100 p-1 text-xs font-bold text-slate-500">
-          <button
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
-              insight.findingStatus === "pinned" && "bg-white text-slate-950 shadow-sm"
-            )}
-            onClick={() => onUpdateInsight(insight.id, { findingStatus: "pinned" })}
-            type="button"
-          >
-            <BadgeCheck size={14} />
-            고정
-          </button>
-          <button
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
-              insight.findingStatus === "hidden" && "bg-white text-slate-950 shadow-sm"
-            )}
-            onClick={() => onUpdateInsight(insight.id, { findingStatus: "hidden" })}
-            type="button"
-          >
-            <CircleSlash size={14} />
-            숨기기
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <h4 className="text-lg font-black leading-7 text-slate-950">{insight.title}</h4>
-        <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">{insight.summary}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Badge variant="amber">영향도 {insight.severity}</Badge>
-          <Badge variant="blue">빈도 {insight.frequency}</Badge>
-          <Badge variant="muted">신뢰도 {insight.confidence}</Badge>
-        </div>
-        {evidencePreview ? (
-          <p className="mt-3 rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-600">
-            <strong className="text-slate-950">{evidencePreview.participant}</strong>: {evidencePreview.content}
-          </p>
-        ) : null}
-      </div>
-
-      <details className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
-        <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-black text-slate-800">
-          자세히 검수하고 수정하기
-          <ChevronDown size={16} />
-        </summary>
-        <div className="mt-4 grid gap-4">
-          <Field label="인사이트 제목">
-            <Input value={insight.title} onChange={(event) => onUpdateInsight(insight.id, { title: event.target.value, findingStatus: "edited" })} />
-          </Field>
-          <Field label="구조적 해석">
-            <Textarea
-              className="min-h-28"
-              value={insight.summary}
-              onChange={(event) => onUpdateInsight(insight.id, { summary: event.target.value, findingStatus: "edited" })}
-            />
-          </Field>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Field label="영향도 / 빈도 / 신뢰도">
-              <div className="grid gap-2 sm:grid-cols-3">
-                {(["severity", "frequency", "confidence"] as const).map((field) => (
-                  <Input
-                    key={field}
-                    value={insight[field]}
-                    onChange={(event) => onUpdateInsight(insight.id, { [field]: event.target.value, findingStatus: "edited" })}
-                  />
-                ))}
-              </div>
-            </Field>
-            <Field label="권장 조치">
-              <Textarea
-                className="min-h-24"
-                value={insight.recommendation}
-                onChange={(event) => onUpdateInsight(insight.id, { recommendation: event.target.value, findingStatus: "edited" })}
-              />
-            </Field>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <p className="text-sm font-black text-slate-800">근거 발화</p>
-            <div className="mt-3 grid gap-2">
-              {evidenceSegmentIds.slice(0, 4).map((segmentId) => {
-                const segment = segmentById.get(segmentId);
-                if (!segment) return null;
-                return (
-                  <p className="rounded-lg bg-white p-3 text-sm leading-6 text-slate-600" key={segmentId}>
-                    <strong className="text-slate-950">{segment.participant}</strong> · {segment.question_or_topic}: {segment.content}
-                  </p>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </details>
-    </motion.article>
   );
 }
 
@@ -2143,28 +1829,47 @@ function ReportPanel({
   );
 }
 
-function SynthesisPlaceholder({ sources }: { sources: SourceRecord[] }) {
+function SynthesisPanel({
+  onMoveSegment,
+  result,
+  segmentById,
+  segmentTopicOverrides,
+  sources,
+}: {
+  onMoveSegment: (segmentId: string, topicId: string) => void;
+  result: AnalysisResponse | null;
+  segmentById: Map<string, Segment>;
+  segmentTopicOverrides: Record<string, string>;
+  sources: SourceRecord[];
+}) {
   const analyzedSources = sources.filter((source) => source.status === "분석완료");
   return (
-    <Card>
-      <CardHeader>
-        <SectionKicker icon={<Network size={16} />} label="종합" />
-        <h3 className="mt-2 text-lg font-black">소스 간 패턴을 연결하는 단계입니다</h3>
-        <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
-          개별 분석이 완료된 소스들의 인사이트를 모아 반복 패턴, 소스별 특이점, 상충되는 발견을 분리합니다.
-        </p>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <MetricCard label="전체 소스" value={`${sources.length}개`} />
-          <MetricCard label="분석 완료" value={`${analyzedSources.length}개`} />
-          <MetricCard label="필요 조건" value="2개 이상" />
-        </div>
-        <div className="rounded-2xl bg-[#f5f0e8] p-4 text-sm leading-6 text-[#6c6a64]">
-          다음 구현 단계에서 이 영역에 `종합 인사이트 도출` 버튼과 cross-source synthesis 결과가 들어갑니다.
-        </div>
-      </CardContent>
-    </Card>
+    <div className="grid gap-5">
+      <Card>
+        <CardHeader>
+          <SectionKicker icon={<Network size={16} />} label="Synthesis" />
+          <h3 className="mt-2 text-lg font-black">소스 간 패턴을 연결하는 단계입니다</h3>
+          <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
+            개별 분석이 완료된 소스들의 인사이트를 모아 반복 패턴, 소스별 특이점, 상충되는 발견을 분리합니다.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MetricCard label="전체 소스" value={`${sources.length}개`} />
+            <MetricCard label="분석 완료" value={`${analyzedSources.length}개`} />
+            <MetricCard label="필요 조건" value="2개 이상" />
+          </div>
+        </CardContent>
+      </Card>
+      {result ? (
+        <AffinityBoard
+          onMoveSegment={onMoveSegment}
+          result={result}
+          segmentById={segmentById}
+          segmentTopicOverrides={segmentTopicOverrides}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -2363,14 +2068,6 @@ function MetricCard({ dark = false, label, value }: { dark?: boolean; label: str
   );
 }
 
-function InfoBox({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <p className="text-xs font-bold text-slate-500">{title}</p>
-      <p className="mt-2 text-sm font-semibold leading-6 text-slate-800">{value}</p>
-    </div>
-  );
-}
 
 function ReportSection({ children, title }: { children: ReactNode; title: string }) {
   return (
