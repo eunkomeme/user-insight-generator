@@ -1,235 +1,60 @@
 # UX Research Report Template
 
-## 1. Executive Summary
+`POST /api/report/markdown`이 생성하는 v1 Markdown 보고서 구조다. 이 API는 LLM을 다시 호출하지 않고, 프론트에서 전달한 검토 인사이트와 세그먼트를 deterministic하게 조합한다.
 
-### Purpose
-
-의사결정자가 빠르게 핵심 결론을 이해하도록 한다.
-
-### Content
-
-- 연구의 한 줄 결론
-- 가장 중요한 사용성 이슈 3-5개
-- 제품 리스크
-- 우선 개선 권고
-
-### AI Input
-
-- approved insights
-- severity/frequency/confidence
-- score summary
-
-### Template
+## Template
 
 ```markdown
+# {project_name} UX 리서치 보고서 초안
+
 ## Executive Summary
+이번 분석에서는 {included_insight_count}개의 핵심 인사이트가 보고서 초안에 반영되었습니다.
 
-이번 리서치는 {product_or_feature}의 {research_goal}을 확인하기 위해 진행되었다.
+## 리서치 개요
+- 프로젝트명: {project_name}
+- 자료명: {source_name}
+- 자료 유형: {source_type}
 
-핵심 결론은 다음과 같다.
+## 방법
+- 원자료 세그먼트: {segment_count}개
+- 분석 대상 참가자 발화: {participant_utterance_count}개
+- 인식된 참가자: {participants}
 
-1. {finding_1}
-2. {finding_2}
-3. {finding_3}
+## 주요 발견
+### 1. {insight.title}
 
-가장 우선적으로 개선해야 할 영역은 {priority_area}이며, 그 이유는 {reason}이다.
-```
+{insight.summary}
 
-## 2. Research Background
+**영향도 / 빈도 / 신뢰도**
+{severity} / {frequency} / {confidence}
 
-### Content
+**개선 제안**
+{recommendation}
 
-- 리서치 배경
-- 제품/기능 맥락
-- 확인하고자 한 질문
-- 조사 범위
+**근거**
+- {participant} · {task}: {segment.content}
 
-### Template
+## 인사이트 유형
+- 사용성 이슈: {count}개
+- 긍정 신호: {count}개
 
-```markdown
-## Research Background
+## 개선 제안
+1. {recommendation}
 
-### Background
-{background}
-
-### Research Questions
-- {question_1}
-- {question_2}
-- {question_3}
-
-### Scope
-이번 분석은 {scope}에 초점을 맞췄다.
-```
-
-## 3. Method
-
-### Content
-
-- 참여자 수
-- 자료 유형
-- 태스크
-- 평가 기준
-- 분석 방법
-
-### Template
-
-```markdown
-## Method
-
-- Participants: {participant_count}
-- Data sources: {data_sources}
-- Tasks: {tasks}
-- Evaluation criteria: {evaluation_criteria}
-
-분석은 인터뷰/관찰 메모와 사용성 평가 점수 데이터를 함께 검토하는 방식으로 진행되었다. AI가 인사이트 초안을 생성했고, 리서처가 근거와 우선순위를 검수했다.
-```
-
-## 4. Key Findings
-
-### Content
-
-- 가장 중요한 발견
-- 사용자 행동 패턴
-- 정성/정량 근거 연결
-- 제품 영향
-
-### Template
-
-```markdown
-## Key Findings
-
-### Finding 1. {title}
-
-{summary}
-
-- Evidence: "{quote}"
-- Related task: {task}
-- Severity: {severity}
-- Frequency: {frequency}
-- Confidence: {confidence}
-- Product impact: {impact}
-```
-
-## 5. Usability Issues
-
-### Content
-
-- 사용성 문제 목록
-- 심각도
-- 빈도
-- 관련 태스크
-- 근거
-- 개선 방향
-
-### Template
-
-```markdown
-## Usability Issues
-
-| Issue | Severity | Frequency | Related Task | Evidence | Recommendation |
-| --- | --- | --- | --- | --- | --- |
-| {issue_title} | {severity} | {frequency} | {task} | {evidence_summary} | {recommendation} |
-```
-
-## 6. Score Summary
-
-### Content
-
-- 태스크별 점수 요약
-- 만족도/난이도/오류 수
-- 정성 이슈와 연결되는 정량 신호
-
-### Template
-
-```markdown
-## Score Summary
-
-### Task-Level Summary
-
-| Task | Avg Score | Success Rate | Avg Difficulty | Avg Satisfaction | Error Count |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| {task} | {avg_score} | {success_rate} | {avg_difficulty} | {avg_satisfaction} | {error_count} |
-
-### Interpretation
-
-{score_interpretation}
-```
-
-## 7. Evidence
-
-### Content
-
-- quote
-- 관찰 메모
-- participant
-- task
-- source
-- 연결된 insight
-
-### Template
-
-```markdown
-## Evidence
-
-| Evidence | Participant | Task | Source | Related Insight |
-| --- | --- | --- | --- | --- |
-| "{quote_or_note}" | {participant} | {task} | {source} | {insight_title} |
-```
-
-## 8. Recommendations
-
-### Content
-
-- 우선순위별 개선 제안
-- 기대 효과
-- 관련 근거
-- 후속 검증 방법
-
-### Template
-
-```markdown
-## Recommendations
-
-### Priority 1. {recommendation_title}
-
-- Problem: {problem}
-- Recommendation: {recommendation}
-- Evidence: {evidence}
-- Expected impact: {impact}
-- Follow-up validation: {validation}
-```
-
-## 9. Appendix
-
-### Content
-
-- 입력 데이터 요약
-- 전체 인사이트 목록
-- rejected insight 목록, 선택 사항
-- 분석 설정
-- LLM provider 정보, 민감 정보 제외
-
-### Template
-
-```markdown
 ## Appendix
-
-### Data Summary
-- Text records: {text_record_count}
-- CSV rows: {csv_row_count}
-- Participants: {participants}
-- Tasks: {tasks}
-
-### Analysis Settings
-- LLM provider: {provider_name}
-- Generated at: {generated_at}
+- {participant} · {task}: {segment.content}
 ```
 
-## Report Generation Rules
+## Inclusion Rules
 
-- approved insight만 보고서 본문에 사용한다.
-- draft/rejected insight는 Appendix 후보로만 둔다.
-- 모든 핵심 발견은 최소 하나 이상의 evidence를 포함해야 한다.
-- 근거가 약한 항목은 confidence를 명시한다.
-- 과장된 표현보다 근거 중심의 실무 문체를 사용한다.
-- 사내 민감 정보가 export 파일에 포함될 수 있으므로 저장 위치와 공유 대상을 확인한다.
+- 프론트는 `hidden`이 아닌 인사이트만 API에 전달한다.
+- 백엔드는 전달받은 인사이트를 모두 보고서 본문에 사용한다.
+- 근거는 `supporting_quotes.source_id` 또는 `evidence_segment_ids`로 세그먼트와 연결한다.
+- 세그먼트를 찾을 수 없으면 supporting quote 텍스트를 fallback으로 사용한다.
+- 인사이트가 없으면 API는 400을 반환한다.
+
+## Writing Rules
+
+- 제목은 AI가 생성하거나 리서처가 수정한 인사이트 제목을 그대로 사용한다.
+- 보고서 본문은 과장 없이 근거 중심의 실무 문체를 유지한다.
+- 민감 정보가 포함될 수 있으므로 export 파일 공유 범위는 리서처가 확인한다.

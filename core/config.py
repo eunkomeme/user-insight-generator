@@ -68,6 +68,18 @@ def get_analysis_chunk_segment_chars() -> int:
     return _positive_int("ANALYSIS_CHUNK_SEGMENT_CHARS", 260)
 
 
+def get_gauss_endpoint() -> str:
+    return os.environ.get("GAUSS_ENDPOINT_URL", "").strip()
+
+
+def get_gauss_client_key() -> str:
+    return os.environ.get("GAUSS_CLIENT_KEY", "").strip()
+
+
+def get_gauss_api_token() -> str:
+    return os.environ.get("GAUSS_API_TOKEN", "").strip()
+
+
 def _positive_int(key: str, default: int) -> int:
     try:
         value = int(os.environ.get(key, str(default)))

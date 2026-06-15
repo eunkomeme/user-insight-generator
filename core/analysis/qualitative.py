@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.intake import Segment
@@ -40,14 +40,26 @@ class InsightDraft:
 
 
 @dataclass
+class InsightRelationship:
+    from_id: str
+    to_id: str
+    label: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class AnalysisResult:
     insights: list[InsightDraft]
     participant_mentions: dict[str, int]
+    relationships: list[InsightRelationship] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "insights": [insight.to_dict() for insight in self.insights],
             "participant_mentions": self.participant_mentions,
+            "relationships": [r.to_dict() for r in self.relationships],
         }
 
     @classmethod
@@ -78,6 +90,15 @@ class AnalysisResult:
                 for item in data.get("insights", [])
             ],
             participant_mentions=dict(data.get("participant_mentions", {})),
+            relationships=[
+                InsightRelationship(
+                    from_id=str(r.get("from_id", "")),
+                    to_id=str(r.get("to_id", "")),
+                    label=str(r.get("label", "")),
+                )
+                for r in data.get("relationships", [])
+                if r.get("from_id") and r.get("to_id")
+            ],
         )
 
 

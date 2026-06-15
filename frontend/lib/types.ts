@@ -5,15 +5,6 @@ export type Segment = {
   content: string;
 };
 
-export type Topic = {
-  id: string;
-  topic_name: string;
-  keywords: string[];
-  summary: string;
-  segment_ids: string[];
-  participant_count: number;
-};
-
 export type Insight = {
   id: string;
   type: string;
@@ -37,6 +28,26 @@ export type Insight = {
   }[];
   confidence: string;
   status: string;
+};
+
+export type InsightRelationship = {
+  from_id: string;
+  to_id: string;
+  label: string;
+};
+
+export type Citation = {
+  source_id: string;
+  source_name: string;
+  segment_id: string;
+  participant: string;
+  quote: string;
+};
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  citations?: Citation[];
 };
 
 export type FindingStatus = "auto_included" | "needs_attention" | "hidden" | "edited" | "pinned";
@@ -63,16 +74,18 @@ export type ProjectSummary = {
 
 export type AnalysisResponse = {
   project_name: string;
+  source?: SourceRecord;
   source_name: string;
   segment_count: number;
   segments: Segment[];
   analysis: {
-    keywords?: { keyword: string; count: number }[];
-    topics?: Topic[];
     insights: Insight[];
     participant_mentions: Record<string, number>;
+    relationships?: InsightRelationship[];
   };
+  quantitative_summary?: Record<string, unknown> | null;
   warnings: string[];
+  recognition?: RecognitionResponse | null;
 };
 
 export type RecognitionResponse = {
@@ -113,29 +126,9 @@ export type SourceRecord = {
   updated_at: string;
 };
 
-export type TabularColumnSuggestion = {
-  source_column: string;
-  suggested_field: string;
-  label: string;
-  confidence: string;
-  sample_values: string[];
-};
-
-export type TabularPreviewResponse = {
-  source_name: string;
-  source_type: string;
-  row_count: number;
-  columns: TabularColumnSuggestion[];
-  sample_rows: Record<string, string>[];
-  standard_fields: { value: string; label: string }[];
-  required_fields: string[];
-  required_mapped_count: number;
-  evidence_mapped_count: number;
-  warnings: string[];
-};
-
 export type DraftState = {
   activeProjectSlug?: string;
+  selectedSourceId?: string;
   projectName: string;
   sourceName: string;
   text: string;

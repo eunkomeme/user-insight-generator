@@ -149,6 +149,33 @@ def save_source_analysis(project_slug: str, source_id: str, analysis: dict[str, 
     return path
 
 
+def load_source_analysis(project_slug: str, source_id: str) -> dict[str, Any]:
+    path = source_dir(project_slug, source_id) / "analysis.json"
+    if not path.exists():
+        raise FileNotFoundError(source_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def save_affinity(project_slug: str, source_id: str, overrides: dict[str, str]) -> None:
+    directory = source_dir(project_slug, source_id)
+    (directory / "affinity.json").write_text(
+        json.dumps(overrides, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_affinity(project_slug: str, source_id: str) -> dict[str, str]:
+    path = source_dir(project_slug, source_id) / "affinity.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def source_dir(project_slug: str, source_id: str) -> Path:
     if not source_id or source_id != _slugify(source_id):
         raise ValueError("유효하지 않은 소스 식별자입니다.")

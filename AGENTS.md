@@ -59,14 +59,16 @@ backend/
   main.py              # FastAPI 엔드포인트
 core/
   analysis/
+    chat.py            # 선택 소스 기반 Q&A
+    gauss.py           # Gauss 연동 후보 모듈
     groq.py            # LLM 분석 (Groq / OpenRouter provider)
-    qualitative.py     # 현재 분석 결과 데이터 모델 (변경 예정)
+    qualitative.py     # 분석 결과 데이터 모델
     storage.py         # 분석 세션 저장/불러오기
     __init__.py
   intake/
     models.py          # Segment 데이터 모델
-    parsers.py         # txt/md 파싱
-    storage.py         # 입력 파일 저장
+    parsers.py         # txt/md/csv/xlsx 파싱
+    sources.py         # 소스 라이브러리 저장
     __init__.py
   storage/
     projects.py        # 프로젝트 메타데이터 CRUD
@@ -93,7 +95,8 @@ docs/
 projects/
   {project_slug}/
     metadata.json          # 프로젝트 메타데이터
-    inputs/                # 업로드된 원본 파일
+    inputs/
+      sources/             # 업로드 원본, 세그먼트, 소스별 분석
     analysis/
       sessions/            # 분석 세션 파일 (타임스탬프 기반)
     reports/               # 보고서 초안
@@ -107,34 +110,22 @@ projects/
 
 - 프로젝트 메타데이터 생성/저장 (`core/storage/projects.py`)
 - txt/md 파일 파싱 → Segment 분리 (`core/intake/parsers.py`)
+- CSV/XLSX 행별 Markdown 관찰 노트 변환 (`core/intake/parsers.py`)
+- 프로젝트 소스 라이브러리 (`core/intake/sources.py`)
 - Groq/OpenRouter LLM 분석 파이프라인 (`core/analysis/groq.py`)
+- 선택 소스 기반 채팅 (`core/analysis/chat.py`)
 - 분석 세션 저장 및 이전 세션 메모리 주입 (`core/analysis/storage.py`)
-- FastAPI 엔드포인트: `/api/analyze`, `/api/parse`, `/api/analyze-upload`
-- Next.js 기본 UI
+- 새 인사이트 스키마: `type / severity / frequency / supporting_quotes / status`
+- Markdown 보고서 생성 API: `/api/report/markdown`
+- Next.js 3패널 워크벤치 UI
+- Gauss 후보 모듈 보존 (`core/analysis/gauss.py`); Gauss 안내문서는 로컬 전용으로 GitHub 업로드 제외
 
-### 미완성 — 우선순위 순
+### 후속 후보
 
-1. **분석 출력 스키마 교체** (최우선)
-   - 현재: `keywords / topics / insights` 구조
-   - 목표: `type / severity / frequency / supporting_quotes / status` 구조
-   - 변경 대상: `core/analysis/qualitative.py`, `core/analysis/groq.py` 프롬프트
-   - 스펙: `docs/FEATURE_SPEC.md` Section 3, `docs/TECHNICAL_APPROACH.md` Section 7
-
-2. **CSV/XLSX 입력 + LLM 컬럼 해석**
-   - pandas/openpyxl로 파일 읽기
-   - LLM이 헤더와 샘플 행을 보고 컬럼 의미 추론
-   - 리서처가 해석 결과 확인/수정 후 분석 실행
-   - 컬럼명 고정 스펙 없음 — LLM이 유연하게 해석
-
-3. **Human Review 워크플로우**
-   - 인사이트 상태: `draft → approved / rejected / merged`
-   - `approved` 상태만 보고서에 포함
-   - 프론트엔드 인사이트 카드 UI + 백엔드 상태 저장 API
-
-4. **Markdown 보고서 생성 및 export**
-   - 승인된 인사이트 기반 보고서 초안 생성
-   - 섹션: 리서치 개요 → 주요 발견 → 인사이트 → 개선 제안
-   - Markdown 파일 다운로드
+- Gauss provider를 환경변수 기반 라우팅에 연결
+- 보고서 편집/저장 API
+- 멀티 소스 통합 synthesis
+- PDF/DOCX export
 
 ---
 

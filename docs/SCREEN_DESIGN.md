@@ -2,310 +2,112 @@
 
 ## 1. Design Direction
 
-v1 UI는 Streamlit 기반 내부 도구로 설계한다. 시각 스타일은 아직 확정하지 않지만, 기본 방향은 조용하고 밀도 있는 사내 리서치 대시보드다.
+CXI Studio는 리서처가 반복적으로 쓰는 작업 도구다. 화면은 마케팅 페이지가 아니라 바로 작업 가능한 3패널 워크벤치로 시작한다.
 
-affinitybubble.com의 bubble/cluster 표현은 보조 참고로만 사용한다. 기본 화면은 리서처가 자료, 근거, 인사이트, 보고서를 안정적으로 검수할 수 있는 table, panel, matrix, outline 중심으로 구성한다.
+- 조용하고 밀도 있는 사내 리서치 도구 톤
+- 소스, 질문, 산출물을 한 화면에서 이동
+- 카드 남용보다 패널, 리스트, 모달 중심
+- 근거와 상태가 항상 보이도록 구성
 
-## 2. Information Architecture
+## 2. Global Layout
 
-Streamlit sidebar navigation:
+```text
+TopBar
+Left: SourcesPanel
+Center: ChatPanel
+Right: StudioPanel
+Overlay: UploadModal / ArtifactModal
+```
 
-- Project Setup
-- Data Intake
-- Analysis Workspace
-- Insight Review
-- Report Builder
-- Export
-- Settings
+### TopBar
 
-각 화면은 하나의 프로젝트 context를 공유한다.
+- CXI Studio 브랜드
+- 프로젝트 메뉴
+- 자동 저장 상태
+- 보고서 반영 인사이트 수
+- 임시 저장 삭제
+- Markdown 다운로드
 
-## 3. Project Setup
+### SourcesPanel
 
-### Goal
+- 소스 추가 버튼
+- 전체 선택/개별 선택
+- 소스 카드: 자료 유형, 세그먼트 수, 참가자 수, 인사이트 수, 상태
+- 액션: 분석, 삭제
+- 접기 상태 지원
 
-리서치의 기본 맥락을 입력한다.
+### ChatPanel
 
-### Layout
+- 선택한 소스 수 표시
+- 추천 질문 버튼
+- grounded answer와 citations
+- 소스가 없으면 입력 비활성화
 
-- Header: 프로젝트 이름과 상태
-- Main form
-  - Project name
-  - Research goal
-  - Product or feature
-  - Participant count
-  - Tasks
-  - Evaluation criteria
-- Action area
-  - Create project
-  - Save project metadata
+### StudioPanel
 
-### Expected States
+- 인사이트
+- 어피니티 다이어그램
+- 인사이트 맵
+- 리포트
+- 분석 결과가 없으면 비활성화
 
-- Empty state: 아직 프로젝트가 없음
-- Editing state: 필수 정보 입력 중
-- Saved state: 다음 단계로 이동 가능
+## 3. Upload Modal
 
-## 4. Data Intake
+### File Mode
 
-### Goal
+- TXT, MD, CSV, XLSX 파일 드롭/선택
+- 파일 선택 즉시 프로젝트 생성이 필요하면 생성 후 소스 라이브러리에 저장
+- 같은 파일로 분석 실행
 
-텍스트 자료와 CSV 점수 자료를 입력하고 분석 가능한 형태로 정리한다.
+### Text Mode
 
-### Layout
+- 텍스트 직접 입력
+- `POST /api/parse`와 `POST /api/analyze` 흐름 사용
 
-- Tabs
-  - Text Notes
-  - CSV Scores
-  - Data Preview
+### Loading
 
-### Text Notes Tab
+분석 단계 텍스트를 순환 표시한다.
 
-Controls:
+## 4. Artifact Modal
 
-- Source type selectbox
-- Participant input
-- Task selectbox/input
-- Text area
-- Text file uploader
-- Add record button
+### Insights
 
-Main content:
+- 인사이트 목록과 상세 편집
+- `findingStatus`: auto_included, needs_attention, pinned, edited, hidden
+- risk flag: weak_evidence, overgeneralized, duplicate_candidate
+- 숨김 처리된 인사이트는 보고서 제외
 
-- 입력된 자료 목록
-- source, participant, task, length, created time 표시
+### Affinity
 
-### CSV Scores Tab
+- 인사이트별 근거 세그먼트 컬럼
+- 세그먼트 카드를 다른 인사이트 컬럼으로 drag & drop
+- 이동 결과는 source affinity override로 저장
 
-Controls:
+### Insight Map
 
-- CSV uploader
-- Column mapping selectboxes
-- Validate mapping button
+- `@xyflow/react` 기반 그래프
+- 인사이트 node와 relationship edge 표시
 
-Main content:
+### Report
 
-- CSV preview table
-- numeric column summary
-- mapping status
+- 보고서 초안 preview
+- Markdown 다운로드 버튼
+- Markdown 본문은 `POST /api/report/markdown`에서 가져온다.
 
-### Data Preview Tab
+## 5. States
 
-Main content:
-
-- text record count
-- CSV row count
-- participant coverage
-- task coverage
-- missing metadata warning
-
-## 5. Analysis Workspace
-
-### Goal
-
-AI 분석 결과 초안을 확인한다.
-
-### Layout
-
-- Top controls
-  - Provider selector
-  - Run analysis button
-  - Analysis status
-- Summary metrics
-  - total insights
-  - usability issues
-  - pain points
-  - positive signals
-  - low confidence items
-- Main tabs
-  - Issues
-  - Evidence Matrix
-  - Task Summary
-  - Score Summary
-
-### Issues Tab
-
-Table columns:
-
-- title
-- type
-- severity
-- frequency
-- confidence
-- related task
-- evidence count
-- status
-
-Row detail panel:
-
-- summary
-- supporting quote
-- source information
-- AI rationale
-
-### Evidence Matrix Tab
-
-Rows:
-
-- insight
-
-Columns:
-
-- participant
-- task
-- source
-- quote/note
-
-Purpose:
-
-- 리서처가 "AI가 왜 이 결론을 냈는지" 확인한다.
-
-### Task Summary Tab
-
-Cards or table:
-
-- task name
-- success trend
-- friction summary
-- related issues
-- representative quote
-
-### Score Summary Tab
-
-Tables:
-
-- task-level averages
-- participant-level rows
-- difficulty/satisfaction/error count distribution
-
-Charts:
-
-- Streamlit 기본 bar chart 또는 line chart
-- 과한 시각화보다 해석 가능한 요약을 우선한다.
-
-## 6. Insight Review
-
-### Goal
-
-AI가 만든 인사이트를 사람이 수정하고 승인한다.
-
-### Layout
-
-- Filter controls
-  - status
-  - type
-  - severity
-  - confidence
-- Insight list
-- Insight editor panel
-
-### Insight Editor Fields
-
-- title
-- type
-- summary
-- severity
-- frequency
-- confidence
-- related tasks
-- related participants
-- evidence
-- status
-
-### Actions
-
-- Approve
-- Reject
-- Save edits
-- Merge selected
-
-### Review Rules
-
-- evidence가 없는 인사이트는 승인 시 경고한다.
-- approved 상태만 보고서 생성에 사용한다.
-- rejected 상태는 삭제하지 않고 기록으로 남긴다.
-
-## 7. Report Builder
-
-### Goal
-
-승인된 인사이트 기반으로 실무형 보고서 초안을 만든다.
-
-### Layout
-
-- Left panel
-  - report outline
-  - section status
-- Main editor
-  - selected section content
-  - evidence references
-- Action area
-  - Generate full report
-  - Regenerate section
-  - Save edits
-
-### Sections
-
-- Executive Summary
-- Research Background
-- Method
-- Key Findings
-- Usability Issues
-- Evidence
-- Recommendations
-- Appendix
-
-### States
-
-- No approved insights: 보고서 생성 불가 안내
-- Draft generated: 편집 가능
-- Section edited: 저장 필요 표시
-- Export ready: Markdown 내보내기 가능
-
-## 8. Export
-
-### Goal
-
-보고서와 분석 결과를 사내에서 공유 가능한 형태로 내보낸다.
-
-### Layout
-
-- Export options
-  - Markdown report
-  - JSON snapshot
-- Preview
-  - Markdown preview
-- Download buttons
-
-### v1 Output
-
-- report.md
-- project_snapshot.json
-
-### v2 Candidate Output
-
-- PDF
-- DOCX
-- 사내 문서 시스템 업로드
-
-## 9. Settings
-
-### Goal
-
-LLM provider와 저장 위치를 설정한다.
-
-### Layout
-
-- Provider settings
-  - Company LLM
-  - Mock
-  - Groq, local dev only
-- Endpoint status
-- Storage path
-- Security notices
-
-### Rules
-
-- API key는 UI에 원문으로 표시하지 않는다.
-- 회사 환경에서는 외부 provider를 비활성화할 수 있다.
-- 저장 위치가 승인된 내부 경로인지 확인하도록 안내한다.
+| 상황 | 표시 |
+| --- | --- |
+| 프로젝트 없음 | 현재 입력값으로 프로젝트 생성 가능 |
+| 소스 없음 | SourcesPanel empty state, ChatPanel disabled |
+| 분석중 | 소스 상태 `분석중`, 단계 텍스트 |
+| 분석완료 | Studio artifact 버튼 활성화 |
+| 분석오류 | 에러 배너, 소스 상태 `오류` |
+| 보고서 준비중 | 다운로드 버튼 disabled, spinner |
+
+## 6. Responsive Behavior
+
+- desktop: 3패널 고정 레이아웃
+- tablet/mobile: 패널이 세로로 쌓임
+- 좌우 패널은 desktop에서 접기 가능
+- 모달은 viewport 안에서 scroll 가능

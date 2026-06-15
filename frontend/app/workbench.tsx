@@ -2,23 +2,35 @@
 
 import type { DragEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import {
+  ArrowLeft,
   BadgeCheck,
+  Check,
   ChevronDown,
   CircleSlash,
   ClipboardCheck,
+  ClipboardPaste,
   Database,
   Download,
   FileText,
   FileUp,
   FolderOpen,
   FolderPlus,
+  LayoutGrid,
   Loader2,
+  MessageSquare,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Send,
   Sparkles,
-  TableProperties,
   Trash2,
+  Upload,
+  X,
 } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
@@ -28,18 +40,20 @@ import { Input } from "../components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { cn } from "../lib/utils";
+import InsightGraph from "../components/InsightGraph";
 import type {
   AnalysisResponse,
+  ChatMessage,
+  Citation,
   DraftState,
-  FindingStatus,
   Insight,
+  InsightRelationship,
   ProjectSummary,
   RecognitionResponse,
   ReviewedInsight,
   RiskFlag,
   Segment,
   SourceRecord,
-  TabularPreviewResponse,
 } from "../lib/types";
 
 const API_BASE =
@@ -48,7 +62,7 @@ const API_BASE =
     ? `${window.location.protocol}//${window.location.hostname}:8000`
     : "http://localhost:8000");
 const DRAFT_STORAGE_KEY = "cxi-studio:draft:v1";
-type WorkspaceTab = "sources" | "findings" | "synthesis" | "report";
+type ArtifactKind = "insights" | "affinity" | "insight-map" | "report";
 
 const sampleText = `# SmartThings 요리 경험 인터뷰
 P1: 오븐 예열할 때는 앱을 쓰지만 실제로 켜졌는지 확인하기 전까지는 불안해요.
@@ -81,21 +95,27 @@ export default function Home() {
   const [tasksText, setTasksText] = useState("오븐 예열 상태 확인\n요리 중 앱 조작\n자동 조리 설정 신뢰 판단");
   const [evaluationCriteriaText, setEvaluationCriteriaText] = useState("신뢰 형성/저해 요인\n조작 맥락의 마찰\n기능 기대와 실제 사용 조건의 간극");
   const [file, setFile] = useState<File | null>(null);
-  const [tabularPreview, setTabularPreview] = useState<TabularPreviewResponse | null>(null);
-  const [columnMappings, setColumnMappings] = useState<Record<string, string>>({});
-  const [previewingTabular, setPreviewingTabular] = useState(false);
   const [recognition, setRecognition] = useState<RecognitionResponse | null>(null);
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [reviewedInsights, setReviewedInsights] = useState<ReviewedInsight[]>([]);
   const [segmentTopicOverrides, setSegmentTopicOverrides] = useState<Record<string, string>>({});
+  const [reportMarkdown, setReportMarkdown] = useState("");
+  const [reportLoading, setReportLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [analysisStageIndex, setAnalysisStageIndex] = useState(0);
   const [error, setError] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("sources");
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [activeArtifact, setActiveArtifact] = useState<ArtifactKind | null>(null);
+  const [sourcesCollapsed, setSourcesCollapsed] = useState(false);
+  const [studioCollapsed, setStudioCollapsed] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [checkedSourceIds, setCheckedSourceIds] = useState<string[]>([]);
   const draftRestoredRef = useRef(false);
   const suppressNextSaveRef = useRef(false);
+  const affinityHydratedRef = useRef(false);
 
   useEffect(() => {
     loadProjects();
@@ -105,25 +125,90 @@ export default function Home() {
     loadSources(activeProjectSlug);
   }, [activeProjectSlug]);
 
+  // 소스 목록이 바뀌면 체크 상태 동기화 — 기존 선택 유지 + 새 소스는 기본 체크.
+  useEffect(() => {
+    setCheckedSourceIds((prev) => {
+      const ids = sources.map((source) => source.id);
+      if (prev.length === 0) return ids;
+      const kept = prev.filter((id) => ids.includes(id));
+      const added = ids.filter((id) => !prev.includes(id));
+      return [...kept, ...added];
+    });
+  }, [sources]);
+
+  useEffect(() => {
+    if (!selectedSourceId || !activeProjectSlug || !affinityHydratedRef.current) return;
+    const timer = setTimeout(() => {
+      fetch(
+        `${API_BASE}/api/projects/${encodeURIComponent(activeProjectSlug)}/sources/${encodeURIComponent(selectedSourceId)}/affinity`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ overrides: segmentTopicOverrides }),
+        }
+      ).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [segmentTopicOverrides, selectedSourceId, activeProjectSlug]);
+
   const segmentById = useMemo(() => {
     const map = new Map<string, Segment>();
     result?.segments.forEach((segment) => map.set(segment.id, segment));
     return map;
   }, [result]);
 
+  // 기본은 전부 반영. 사용자가 명시적으로 제외(hidden)한 항목만 리포트에서 빠진다.
   const reportInsights = useMemo(
-    () => reviewedInsights.filter((i) =>
-      i.findingStatus === "auto_included" || i.findingStatus === "pinned" || i.findingStatus === "edited"
-    ),
+    () => reviewedInsights.filter((i) => i.findingStatus !== "hidden"),
     [reviewedInsights]
   );
-  const attentionCount = reviewedInsights.filter((i) => i.findingStatus === "needs_attention").length;
-  const autoIncludedCount = reviewedInsights.filter((i) => i.findingStatus === "auto_included").length;
-  const canAnalyze = inputMode === "text" && Boolean(text.trim());
-  const reportMarkdown = useMemo(
-    () => buildReportMarkdown(projectName, recognition, result, reportInsights, segmentById),
-    [projectName, recognition, result, reportInsights, segmentById]
-  );
+  const excludedCount = reviewedInsights.filter((i) => i.findingStatus === "hidden").length;
+  const autoIncludedCount = reportInsights.length;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!result || !reportInsights.length) {
+      setReportMarkdown("");
+      setReportLoading(false);
+      return;
+    }
+
+    setReportLoading(true);
+    fetch(`${API_BASE}/api/report/markdown`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_name: projectName,
+        source_name: result.source_name,
+        source_type: recognition?.source_type ?? "",
+        segment_count: recognition?.segment_count ?? result.segment_count,
+        participant_utterance_count: recognition?.participant_utterance_count ?? null,
+        participants: recognition?.participants ?? [],
+        insights: reportInsights,
+        segments: result.segments,
+      }),
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail ?? "보고서 Markdown 생성에 실패했습니다.");
+        }
+        if (!cancelled) setReportMarkdown(data.markdown ?? "");
+      })
+      .catch((requestError) => {
+        if (!cancelled) {
+          setReportMarkdown("");
+          setError(requestError instanceof Error ? requestError.message : "보고서 Markdown 생성 중 오류가 발생했습니다.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setReportLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectName, recognition, reportInsights, result]);
 
   async function loadProjects() {
     try {
@@ -148,6 +233,56 @@ export default function Home() {
       setSources(Array.isArray(data.sources) ? data.sources : []);
     } catch {
       setSources([]);
+    }
+  }
+
+  async function loadSourceAffinity(projectSlug: string, sourceId: string) {
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/projects/${encodeURIComponent(projectSlug)}/sources/${encodeURIComponent(sourceId)}/affinity`
+      );
+      if (!response.ok) return {};
+      const data = await response.json();
+      return data.overrides ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function selectSource(sourceId: string) {
+    if (!activeProjectSlug) {
+      setSelectedSourceId(sourceId);
+      return;
+    }
+    const source = sources.find((item) => item.id === sourceId);
+    affinityHydratedRef.current = false;
+    setSelectedSourceId(sourceId);
+    setError("");
+    const overrides = await loadSourceAffinity(activeProjectSlug, sourceId);
+    setSegmentTopicOverrides(overrides);
+    affinityHydratedRef.current = true;
+
+    if (source?.status !== "분석완료") return;
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/projects/${encodeURIComponent(activeProjectSlug)}/sources/${encodeURIComponent(sourceId)}/analysis`
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ?? "저장된 분석 결과를 불러오지 못했습니다.");
+      }
+      setResult(data);
+      setRecognition(data.recognition ?? null);
+      setReviewedInsights(
+        data.analysis.insights.map((insight: Insight) => ({
+          ...insight,
+          ...assignFindingStatus(insight),
+        }))
+      );
+      setProjectMessage("저장된 분석 결과를 불러왔습니다.");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "저장된 분석 결과를 불러오는 중 오류가 발생했습니다.");
     }
   }
 
@@ -229,12 +364,14 @@ export default function Home() {
       setResearchGoal(selected.research_goal ?? "");
       setTasksText((selected.tasks ?? []).join("\n"));
       setEvaluationCriteriaText((selected.evaluation_criteria ?? []).join("\n"));
+      setSelectedSourceId("");
+      affinityHydratedRef.current = false;
       setRecognition(null);
       setResult(null);
       setReviewedInsights([]);
       setSegmentTopicOverrides({});
       await loadSources(selected.slug);
-      setWorkspaceTab("sources");
+      setActiveArtifact(null);
       setProjectMessage("프로젝트를 불러왔습니다.");
     } catch (requestError) {
       setProjectMessage(requestError instanceof Error ? requestError.message : "프로젝트 선택 중 오류가 발생했습니다.");
@@ -281,6 +418,7 @@ export default function Home() {
       const draft = JSON.parse(rawDraft) as Partial<DraftState>;
       if (typeof draft.activeProjectSlug === "string") setActiveProjectSlug(draft.activeProjectSlug);
       if (draft.projectName) setProjectName(draft.projectName);
+      if (typeof draft.selectedSourceId === "string") setSelectedSourceId(draft.selectedSourceId);
       if (draft.sourceName) setSourceName(draft.sourceName);
       if (typeof draft.text === "string") setText(draft.text);
       if (draft.inputMode === "file" || draft.inputMode === "text") setInputMode(draft.inputMode);
@@ -308,6 +446,7 @@ export default function Home() {
     const savedAt = new Date().toISOString();
     const draft: DraftState = {
       activeProjectSlug,
+      selectedSourceId,
       projectName,
       sourceName,
       text,
@@ -327,7 +466,7 @@ export default function Home() {
     } catch {
       setError("브라우저 임시 저장 공간이 부족합니다. 보고서 Markdown을 다운로드하거나 임시 저장을 삭제해주세요.");
     }
-  }, [activeProjectSlug, evaluationCriteriaText, inputMode, projectName, recognition, researchGoal, result, reviewedInsights, segmentTopicOverrides, sourceName, tasksText, text]);
+  }, [activeProjectSlug, evaluationCriteriaText, inputMode, projectName, recognition, researchGoal, result, reviewedInsights, segmentTopicOverrides, selectedSourceId, sourceName, tasksText, text]);
 
   function assignFindingStatus(insight: Insight): Pick<ReviewedInsight, "findingStatus" | "riskFlags"> {
     const quoteCount = insight.supporting_quotes?.length ?? 0;
@@ -336,7 +475,7 @@ export default function Home() {
     return { findingStatus: "auto_included", riskFlags: [] };
   }
 
-  async function runAnalysis(selectedFile = file) {
+  async function runAnalysis(selectedFile = file, mode: "file" | "text" = inputMode) {
     setLoading(true);
     setAnalysisStageIndex(0);
     setError("");
@@ -348,26 +487,27 @@ export default function Home() {
       setAnalysisStageIndex((current) => Math.min(current + 1, analysisStages.length - 1));
     }, 2500);
     try {
-      const parseResponse = inputMode === "file" && selectedFile
+      const parseResponse = mode === "file" && selectedFile
         ? await recognizeFile(selectedFile)
         : await recognizeText();
       const parseData = await parseResponse.json();
       if (!parseResponse.ok) throw new Error(parseData.detail ?? "자료 인식에 실패했습니다.");
       setRecognition(parseData);
 
-      const analyzeResponse = inputMode === "file" && selectedFile
+      const analyzeResponse = mode === "file" && selectedFile
         ? await analyzeFile(selectedFile)
         : await analyzeText();
       const analyzeData = await analyzeResponse.json();
       if (!analyzeResponse.ok) throw new Error(formatErrorMessage(analyzeData.detail ?? "분석 요청에 실패했습니다."));
       setResult(analyzeData);
+      if (analyzeData.source?.id) setSelectedSourceId(analyzeData.source.id);
       setReviewedInsights(
         analyzeData.analysis.insights.map((insight: Insight) => ({
           ...insight,
           ...assignFindingStatus(insight),
         }))
       );
-      setWorkspaceTab("report");
+      setUploadOpen(false);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "분석 중 오류가 발생했습니다.");
     } finally {
@@ -393,36 +533,6 @@ export default function Home() {
     return fetch(`${API_BASE}/api/parse-upload`, { method: "POST", body: formData });
   }
 
-  async function previewTabularFile(uploadFile: File) {
-    if (!isTabularFile(uploadFile.name)) {
-      setTabularPreview(null);
-      setColumnMappings({});
-      return;
-    }
-    setPreviewingTabular(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", uploadFile);
-      const response = await fetch(`${API_BASE}/api/preview-tabular`, { method: "POST", body: formData });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail ?? "표 데이터 미리보기에 실패했습니다.");
-      }
-      setTabularPreview(data);
-      setColumnMappings(
-        Object.fromEntries(
-          data.columns.map((column: { source_column: string; suggested_field: string }) => [column.source_column, column.suggested_field])
-        )
-      );
-    } catch (requestError) {
-      setTabularPreview(null);
-      setColumnMappings({});
-      setError(requestError instanceof Error ? requestError.message : "표 데이터 미리보기 중 오류가 발생했습니다.");
-    } finally {
-      setPreviewingTabular(false);
-    }
-  }
-
   async function uploadSourceToLibrary(uploadFile: File) {
     setProjectLoading(true);
     setProjectMessage("");
@@ -442,6 +552,7 @@ export default function Home() {
       setSelectedSourceId(data.source.id);
       setRecognition(data.recognition ?? null);
       setProjectMessage("소스 라이브러리에 추가했습니다.");
+      affinityHydratedRef.current = true;
     } catch (requestError) {
       setProjectMessage(requestError instanceof Error ? requestError.message : "소스 저장 중 오류가 발생했습니다.");
     } finally {
@@ -477,7 +588,8 @@ export default function Home() {
     setLoading(true);
     setAnalysisStageIndex(0);
     setError("");
-    setSelectedSourceId(source.id);
+      setSelectedSourceId(source.id);
+      affinityHydratedRef.current = false;
     setSources((current) => current.map((item) => (item.id === source.id ? { ...item, status: "분석중" } : item)));
     const stageTimer = window.setInterval(() => {
       setAnalysisStageIndex((current) => Math.min(current + 1, analysisStages.length - 1));
@@ -496,14 +608,17 @@ export default function Home() {
         throw new Error(formatErrorMessage(data.detail ?? "소스 분석에 실패했습니다."));
       }
       setResult(data);
+      if (data.recognition) setRecognition(data.recognition);
       setReviewedInsights(
         data.analysis.insights.map((insight: Insight) => ({
           ...insight,
           ...assignFindingStatus(insight),
         }))
       );
+      const overrides = await loadSourceAffinity(activeProjectSlug, source.id);
+      setSegmentTopicOverrides(overrides);
+      affinityHydratedRef.current = true;
       setSources((current) => current.map((item) => (item.id === source.id ? data.source : item)));
-      setWorkspaceTab("report");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "소스 분석 중 오류가 발생했습니다.");
       setSources((current) => current.map((item) => (item.id === source.id ? { ...item, status: "오류" } : item)));
@@ -540,8 +655,9 @@ export default function Home() {
 
   function handleFileChange(selectedFile: File | null) {
     setFile(selectedFile);
-    setTabularPreview(null);
-    setColumnMappings({});
+    setSelectedSourceId("");
+    affinityHydratedRef.current = false;
+    setInputMode("file");
     setRecognition(null);
     setResult(null);
     setReviewedInsights([]);
@@ -549,27 +665,51 @@ export default function Home() {
     setError("");
     if (selectedFile) {
       setSourceName(selectedFile.name);
-      void previewTabularFile(selectedFile);
       void uploadSourceToLibrary(selectedFile);
-      void runAnalysis(selectedFile);
+      void runAnalysis(selectedFile, "file");
     }
-  }
-
-  function changeInputMode(nextMode: "file" | "text") {
-    setInputMode(nextMode);
-    setRecognition(null);
-    setResult(null);
-    setReviewedInsights([]);
-    setSegmentTopicOverrides({});
-    setTabularPreview(null);
-    setColumnMappings({});
-    setError("");
   }
 
   function updateInsight(insightId: string, updates: Partial<ReviewedInsight>) {
     setReviewedInsights((current) =>
       current.map((insight) => (insight.id === insightId ? { ...insight, ...updates } : insight))
     );
+  }
+
+  function toggleCheckedSource(sourceId: string) {
+    setCheckedSourceIds((current) =>
+      current.includes(sourceId) ? current.filter((id) => id !== sourceId) : [...current, sourceId]
+    );
+  }
+
+  function toggleAllSources() {
+    setCheckedSourceIds((current) => (current.length === sources.length ? [] : sources.map((source) => source.id)));
+  }
+
+  async function sendChat(questionOverride = "") {
+    const question = (questionOverride || chatInput).trim();
+    if (!question || !activeProjectSlug || chatLoading) return;
+    const history = chatMessages.map((message) => ({ role: message.role, content: message.content }));
+    setChatMessages((current) => [...current, { role: "user", content: question }]);
+    setChatInput("");
+    setChatLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(activeProjectSlug)}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, source_ids: checkedSourceIds, history }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(formatErrorMessage(data.detail ?? "답변 생성에 실패했습니다."));
+      setChatMessages((current) => [...current, { role: "assistant", content: data.answer, citations: data.citations }]);
+    } catch (requestError) {
+      setChatMessages((current) => [
+        ...current,
+        { role: "assistant", content: requestError instanceof Error ? requestError.message : "답변 중 오류가 발생했습니다." },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
   }
 
   function clearDraft() {
@@ -584,234 +724,198 @@ export default function Home() {
     setTasksText("오븐 예열 상태 확인\n요리 중 앱 조작\n자동 조리 설정 신뢰 판단");
     setEvaluationCriteriaText("신뢰 형성/저해 요인\n조작 맥락의 마찰\n기능 기대와 실제 사용 조건의 간극");
     setFile(null);
-    setTabularPreview(null);
-    setColumnMappings({});
     setRecognition(null);
     setResult(null);
     setReviewedInsights([]);
     setSegmentTopicOverrides({});
     setError("");
     setLastSavedAt("");
-    setWorkspaceTab("sources");
+    setActiveArtifact(null);
+    setUploadOpen(false);
   }
 
   return (
-    <main className="min-h-screen text-[#141413]">
-      <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col lg:flex-row">
-        <Sidebar
-          activeProjectSlug={activeProjectSlug}
-          autoIncludedCount={autoIncludedCount}
-          onCreateProject={createCurrentProject}
-          onDeleteProject={removeProject}
-          onSelectProject={selectProject}
-          projectLoading={projectLoading}
-          projectMessage={projectMessage}
-          attentionCount={attentionCount}
-          projectName={projectName}
-          projects={projects}
-          sourceCount={sources.length}
+    <main className="flex min-h-screen flex-col text-[#141413]">
+      <TopBar
+        activeProjectSlug={activeProjectSlug}
+        autoIncludedCount={autoIncludedCount}
+        canDownload={Boolean(reportMarkdown) && !reportLoading}
+        lastSavedAt={lastSavedAt}
+        onClearDraft={clearDraft}
+        onCreateProject={createCurrentProject}
+        onDeleteProject={removeProject}
+        onDownload={() => downloadMarkdown(reportMarkdown)}
+        onSelectProject={selectProject}
+        projectLoading={projectLoading}
+        projectMessage={projectMessage}
+        projectName={projectName}
+        projects={projects}
+      />
+
+      <div className="mx-auto flex w-full max-w-[1700px] flex-1 flex-col lg:h-[calc(100vh-61px)] lg:min-h-0 lg:flex-row lg:overflow-hidden">
+        <SourcesPanel
+          activeSourceId={selectedSourceId}
+          analysisStage={analysisStages[analysisStageIndex]}
+          checkedSourceIds={checkedSourceIds}
+          collapsed={sourcesCollapsed}
+          loading={loading}
+          onAddSource={() => setUploadOpen(true)}
+          onAnalyzeSource={analyzeLibrarySource}
+          onDeleteSource={deleteLibrarySource}
+          onSelectSource={selectSource}
+          onToggleCollapse={() => setSourcesCollapsed((value) => !value)}
+          onToggleSource={toggleCheckedSource}
+          onToggleAll={toggleAllSources}
+          sources={sources}
         />
 
-        <section className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
-          <WorkbenchHeader
-            reportInsightsCount={reportInsights.length}
-            canDownload={Boolean(reportMarkdown)}
-            lastSavedAt={lastSavedAt}
-            onClearDraft={clearDraft}
-            onDownload={() => downloadMarkdown(reportMarkdown)}
-            recognition={recognition}
-            result={result}
-          />
-          <WorkspaceNav
-            activeTab={workspaceTab}
-            autoIncludedCount={autoIncludedCount}
-            attentionCount={attentionCount}
-            canOpenInsights={Boolean(result)}
-            canOpenReport={Boolean(result)}
-            canOpenSynthesis={sources.filter((source) => source.status === "분석완료").length >= 2}
-            onChange={setWorkspaceTab}
-            recognitionReady={Boolean(recognition)}
-            sourceCount={sources.length}
-          />
+        <ChatPanel
+          checkedCount={checkedSourceIds.length}
+          error={error}
+          hasSources={sources.length > 0}
+          input={chatInput}
+          loading={chatLoading}
+          messages={chatMessages}
+          onSend={sendChat}
+          setInput={setChatInput}
+        />
 
-          <div className="mt-6">
-            <AnimatePresence mode="popLayout">
-              {workspaceTab === "sources" ? (
-                <MotionBlock key="sources">
-                  <div className="grid gap-5">
-                    <InputPanel
-                      canAnalyze={canAnalyze}
-                      columnMappings={columnMappings}
-                      evaluationCriteriaText={evaluationCriteriaText}
-                      file={file}
-                      fileInputRef={fileInputRef}
-                      inputMode={inputMode}
-                      loading={loading}
-                      analysisStage={analysisStages[analysisStageIndex]}
-                      onAnalyze={() => runAnalysis()}
-                      onFileChange={handleFileChange}
-                      onMappingChange={(column, field) =>
-                        setColumnMappings((current) => ({ ...current, [column]: field }))
-                      }
-                      onModeChange={changeInputMode}
-                      previewingTabular={previewingTabular}
-                      projectName={projectName}
-                      researchGoal={researchGoal}
-                      setEvaluationCriteriaText={setEvaluationCriteriaText}
-                      setProjectName={setProjectName}
-                      setResearchGoal={setResearchGoal}
-                      setSourceName={setSourceName}
-                      setTasksText={setTasksText}
-                      setText={setText}
-                      sourceName={sourceName}
-                      tabularPreview={tabularPreview}
-                      tasksText={tasksText}
-                      text={text}
-                    />
-                    <SourceLibraryPanel
-                      activeSourceId={selectedSourceId}
-                      analysisStage={analysisStages[analysisStageIndex]}
-                      loading={loading}
-                      onAnalyzeSource={analyzeLibrarySource}
-                      onDeleteSource={deleteLibrarySource}
-                      onSelectSource={setSelectedSourceId}
-                      sources={sources}
-                    />
-                  </div>
-                </MotionBlock>
-              ) : null}
-
-              {error ? (
-                <MotionBlock key="error">
-                  <div className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm font-medium text-rose-800">
-                    {error}
-                  </div>
-                </MotionBlock>
-              ) : null}
-
-              {workspaceTab === "findings" ? (
-                <MotionBlock key="findings">
-                  {result ? (
-                    <FindingsWorkspace
-                      attentionCount={attentionCount}
-                      onUpdateInsight={updateInsight}
-                      reviewedInsights={reviewedInsights}
-                      segmentById={segmentById}
-                    />
-                  ) : (
-                    <EmptyState loading={loading} analysisStage={analysisStages[analysisStageIndex]} />
-                  )}
-                </MotionBlock>
-              ) : null}
-
-              {workspaceTab === "report" && result ? (
-                <MotionBlock key="report">
-                  <ReportPanel
-                    attentionCount={attentionCount}
-                    reportInsights={reportInsights}
-                    onDownload={() => downloadMarkdown(reportMarkdown)}
-                    recognition={recognition}
-                    reportMarkdown={reportMarkdown}
-                    result={result}
-                  />
-                </MotionBlock>
-              ) : null}
-
-              {workspaceTab === "synthesis" ? (
-                <MotionBlock key="synthesis">
-                  <SynthesisPanel
-                    onMoveSegment={(segmentId, topicId) =>
-                      setSegmentTopicOverrides((current) => ({ ...current, [segmentId]: topicId }))
-                    }
-                    result={result}
-                    segmentById={segmentById}
-                    segmentTopicOverrides={segmentTopicOverrides}
-                    sources={sources}
-                  />
-                </MotionBlock>
-              ) : null}
-            </AnimatePresence>
-          </div>
-        </section>
+        <StudioPanel
+          collapsed={studioCollapsed}
+          onOpenArtifact={setActiveArtifact}
+          onToggleCollapse={() => setStudioCollapsed((value) => !value)}
+          relationshipsCount={result?.analysis.relationships?.length ?? 0}
+          reportInsightsCount={reportInsights.length}
+          resultReady={Boolean(result)}
+        />
       </div>
+
+      {uploadOpen ? (
+        <UploadModal
+          analysisStage={analysisStages[analysisStageIndex]}
+          loading={loading}
+          onAnalyzeText={() => {
+            setInputMode("text");
+            void runAnalysis(null, "text");
+          }}
+          onClose={() => setUploadOpen(false)}
+          onPickFile={handleFileChange}
+          setText={setText}
+          text={text}
+        />
+      ) : null}
+
+      {activeArtifact && result ? (
+        <ArtifactModal
+          excludedCount={excludedCount}
+          kind={activeArtifact}
+          onClose={() => setActiveArtifact(null)}
+          onDownload={() => downloadMarkdown(reportMarkdown)}
+          onMoveSegment={(segmentId, topicId) =>
+            setSegmentTopicOverrides((current) => ({ ...current, [segmentId]: topicId }))
+          }
+          onUpdateInsight={updateInsight}
+          recognition={recognition}
+          reportInsights={reportInsights}
+          reportLoading={reportLoading}
+          reportMarkdown={reportMarkdown}
+          result={result}
+          reviewedInsights={reviewedInsights}
+          segmentById={segmentById}
+          segmentTopicOverrides={segmentTopicOverrides}
+        />
+      ) : null}
     </main>
   );
 }
 
-function Sidebar({
+function TopBar({
   activeProjectSlug,
   autoIncludedCount,
+  canDownload,
+  lastSavedAt,
+  onClearDraft,
   onCreateProject,
   onDeleteProject,
+  onDownload,
   onSelectProject,
   projectLoading,
   projectMessage,
-  attentionCount,
   projectName,
-  projects,
-  sourceCount
+  projects
 }: {
   activeProjectSlug: string;
   autoIncludedCount: number;
+  canDownload: boolean;
+  lastSavedAt: string;
+  onClearDraft: () => void;
   onCreateProject: () => void;
   onDeleteProject: (project: ProjectSummary) => void;
+  onDownload: () => void;
   onSelectProject: (project: ProjectSummary) => void;
   projectLoading: boolean;
   projectMessage: string;
-  attentionCount: number;
   projectName: string;
   projects: ProjectSummary[];
-  sourceCount: number;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
-    <aside className="border-b border-[#e6dfd8] bg-[#faf9f5]/85 px-5 py-5 backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-80 lg:border-b-0 lg:border-r lg:px-6 lg:py-8">
-      <div className="flex items-start justify-between gap-4 lg:block">
-        <div>
-          <div className="flex items-center gap-2">
-            <div>
-              <h1 className="font-serif text-2xl font-normal leading-tight">CXI Studio</h1>
-              <p className="text-xs font-semibold text-[#6c6a64]">Customer Experience Intelligence</p>
+    <header className="sticky top-0 z-30 border-b border-[#e6dfd8] bg-[#faf9f5]/90 backdrop-blur">
+      <div className="mx-auto flex w-full max-w-[1700px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#141413] text-[#faf9f5]">
+              <Network size={18} />
             </div>
+            <span className="hidden font-serif text-lg leading-none sm:block">CXI Studio</span>
           </div>
-          <ColorChips className="mt-5" />
-          <div className="mt-6 hidden rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4 lg:block">
-            <p className="text-xs font-bold text-[#6c6a64]">현재 프로젝트</p>
-            <p className="mt-2 line-clamp-2 text-sm font-semibold leading-6 text-[#252523]">{projectName}</p>
+
+          <div className="relative min-w-0">
+            <button
+              className="flex min-w-0 items-center gap-2 rounded-xl border border-[#e6dfd8] bg-[#f5f0e8] px-3 py-2 text-left transition hover:bg-[#efe9de]"
+              onClick={() => setMenuOpen((value) => !value)}
+              type="button"
+            >
+              <FolderOpen className="shrink-0 text-[#a9583e]" size={16} />
+              <span className="min-w-0 truncate text-sm font-bold text-[#252523]">{projectName}</span>
+              <ChevronDown className={cn("shrink-0 text-[#6c6a64] transition", menuOpen && "rotate-180")} size={16} />
+            </button>
+            {menuOpen ? (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                <div className="absolute left-0 top-full z-20 mt-2 w-80 rounded-2xl border border-[#e6dfd8] bg-[#faf9f5] p-1 shadow-xl shadow-[#e6dfd8]/60">
+                  <ProjectSwitcher
+                    activeProjectSlug={activeProjectSlug}
+                    loading={projectLoading}
+                    message={projectMessage}
+                    onCreateProject={onCreateProject}
+                    onDeleteProject={onDeleteProject}
+                    onSelectProject={(project) => {
+                      onSelectProject(project);
+                      setMenuOpen(false);
+                    }}
+                    projects={projects}
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
-        <Badge variant={autoIncludedCount ? "green" : "muted"}>{autoIncludedCount ? `자동 반영 ${autoIncludedCount}` : "초안"}</Badge>
-      </div>
 
-      <ProjectSwitcher
-        activeProjectSlug={activeProjectSlug}
-        loading={projectLoading}
-        message={projectMessage}
-        onCreateProject={onCreateProject}
-        onDeleteProject={onDeleteProject}
-        onSelectProject={onSelectProject}
-        projects={projects}
-      />
-
-      <div className="mt-6 hidden rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4 lg:block">
-        <p className="mb-3 text-xs font-black uppercase text-[#6c6a64]">프로젝트 현황</p>
-        <div className="grid gap-2 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-[#6c6a64]">소스</span>
-            <span className="font-bold text-[#252523]">{sourceCount}개</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[#6c6a64]">자동 반영</span>
-            <span className="font-bold text-[#252523]">{autoIncludedCount}개</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[#6c6a64]">확인 필요</span>
-            <span className={cn("font-bold", attentionCount ? "text-[#a9583e]" : "text-[#252523]")}>
-              {attentionCount}개
-            </span>
-          </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="muted">{lastSavedAt ? `자동 저장 ${formatSavedTime(lastSavedAt)}` : "자동 저장 준비"}</Badge>
+          <Badge variant={autoIncludedCount ? "green" : "muted"}>{autoIncludedCount ? `자동 반영 ${autoIncludedCount}` : "초안"}</Badge>
+          <Button className="hidden sm:inline-flex" onClick={onClearDraft} variant="ghost">
+            임시 저장 삭제
+          </Button>
+          <Button disabled={!canDownload} onClick={onDownload} variant="secondary">
+            <Download size={18} />
+            <span className="hidden sm:inline">보고서 다운로드</span>
+          </Button>
         </div>
       </div>
-    </aside>
+    </header>
   );
 }
 
@@ -898,380 +1002,583 @@ function ProjectSwitcher({
   );
 }
 
-function WorkspaceNav({
-  activeTab,
-  autoIncludedCount,
-  attentionCount,
-  canOpenInsights,
-  canOpenReport,
-  canOpenSynthesis,
-  onChange,
-  recognitionReady,
-  sourceCount
+function SourcesPanel({
+  activeSourceId,
+  analysisStage,
+  checkedSourceIds,
+  collapsed,
+  loading,
+  onAddSource,
+  onAnalyzeSource,
+  onDeleteSource,
+  onSelectSource,
+  onToggleAll,
+  onToggleCollapse,
+  onToggleSource,
+  sources
 }: {
-  activeTab: WorkspaceTab;
-  autoIncludedCount: number;
-  attentionCount: number;
-  canOpenInsights: boolean;
-  canOpenReport: boolean;
-  canOpenSynthesis: boolean;
-  onChange: (tab: WorkspaceTab) => void;
-  recognitionReady: boolean;
-  sourceCount: number;
+  activeSourceId: string;
+  analysisStage: string;
+  checkedSourceIds: string[];
+  collapsed: boolean;
+  loading: boolean;
+  onAddSource: () => void;
+  onAnalyzeSource: (source: SourceRecord) => void;
+  onDeleteSource: (source: SourceRecord) => void;
+  onSelectSource: (sourceId: string) => void;
+  onToggleAll: () => void;
+  onToggleCollapse: () => void;
+  onToggleSource: (sourceId: string) => void;
+  sources: SourceRecord[];
 }) {
-  const tabs: {
-    id: WorkspaceTab;
-    label: string;
-    description: string;
-    disabled?: boolean;
-    count?: string;
-  }[] = [
-    {
-      id: "sources",
-      label: "Sources",
-      description: sourceCount ? `${sourceCount}개 자료 관리` : recognitionReady ? "원자료 인식 완료" : "자료를 추가하세요",
-    },
-    {
-      id: "findings",
-      label: "Findings",
-      description: canOpenInsights
-        ? `자동 반영 ${autoIncludedCount}개 · 확인 필요 ${attentionCount}개`
-        : "분석 후 활성화",
-      disabled: !canOpenInsights,
-      count: canOpenInsights && attentionCount ? `${attentionCount} 확인` : undefined,
-    },
-    {
-      id: "synthesis",
-      label: "Synthesis",
-      description: canOpenSynthesis ? "소스 간 패턴 연결" : "분석 완료 소스 2개 필요",
-      disabled: !canOpenSynthesis,
-      count: canOpenSynthesis ? "준비됨" : undefined,
-    },
-    {
-      id: "report",
-      label: "Report",
-      description: canOpenReport ? "보고서 초안 준비됨" : "분석 후 활성화",
-      disabled: !canOpenReport,
-      count: canOpenReport ? "초안 준비" : undefined,
-    },
-  ];
+  if (collapsed) {
+    return (
+      <aside className="hidden shrink-0 flex-col items-center gap-3 border-r border-[#e6dfd8] bg-[#faf9f5]/60 py-4 lg:flex lg:w-14">
+        <button className="rounded-lg p-1.5 text-[#6c6a64] transition hover:bg-[#efe9de]" onClick={onToggleCollapse} title="출처 열기" type="button">
+          <PanelLeftOpen size={18} />
+        </button>
+        <button className="rounded-lg bg-[#141413] p-1.5 text-[#faf9f5] transition hover:bg-[#252320]" onClick={onAddSource} title="소스 추가" type="button">
+          <Plus size={18} />
+        </button>
+        <span className="mt-1 text-xs font-bold tracking-wide text-[#8e8b82] [writing-mode:vertical-rl]">출처 {sources.length}</span>
+      </aside>
+    );
+  }
+  return (
+    <aside className="shrink-0 border-b border-[#e6dfd8] bg-[#faf9f5]/60 lg:sticky lg:top-[61px] lg:h-[calc(100vh-61px)] lg:w-80 lg:overflow-y-auto lg:border-b-0 lg:border-r">
+      <div className="flex items-center justify-between gap-2 px-4 pt-4">
+        <div className="flex items-center gap-2">
+          <FolderOpen className="text-[#a9583e]" size={16} />
+          <h2 className="text-sm font-black">출처</h2>
+          <Badge variant={sources.length ? "blue" : "muted"}>{sources.length}</Badge>
+        </div>
+        <button className="hidden rounded-lg p-1.5 text-[#6c6a64] transition hover:bg-[#efe9de] lg:block" onClick={onToggleCollapse} title="접기" type="button">
+          <PanelLeftClose size={18} />
+        </button>
+      </div>
+      <div className="px-4 pt-3">
+        <Button className="w-full justify-center" onClick={onAddSource}>
+          <Plus size={16} />
+          소스 추가
+        </Button>
+      </div>
+      {sources.length ? (
+        <button
+          className="flex w-full items-center gap-2 px-5 pt-3 text-xs font-bold text-[#6c6a64] transition hover:text-[#252523]"
+          onClick={onToggleAll}
+          type="button"
+        >
+          <CheckBox checked={checkedSourceIds.length === sources.length && sources.length > 0} />
+          모두 선택
+        </button>
+      ) : null}
+      <div className="p-4">
+        <SourceLibraryPanel
+          activeSourceId={activeSourceId}
+          analysisStage={analysisStage}
+          checkedSourceIds={checkedSourceIds}
+          loading={loading}
+          onAnalyzeSource={onAnalyzeSource}
+          onDeleteSource={onDeleteSource}
+          onSelectSource={onSelectSource}
+          onToggleSource={onToggleSource}
+          sources={sources}
+        />
+      </div>
+    </aside>
+  );
+}
+
+function CheckBox({ checked }: { checked: boolean }) {
+  return (
+    <span
+      className={cn(
+        "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition",
+        checked ? "border-[#cc785c] bg-[#cc785c] text-[#faf9f5]" : "border-[#c9c2b8] bg-[#faf9f5]"
+      )}
+    >
+      {checked ? <Check size={12} strokeWidth={3} /> : null}
+    </span>
+  );
+}
+
+const CHAT_SUGGESTIONS = ["주요 불만은 무엇인가요?", "참가자별 반응 차이는?", "가장 자주 나온 주제는?", "긍정적인 반응은 어떤 게 있나요?"];
+
+function ChatPanel({
+  checkedCount,
+  error,
+  hasSources,
+  input,
+  loading,
+  messages,
+  onSend,
+  setInput
+}: {
+  checkedCount: number;
+  error: string;
+  hasSources: boolean;
+  input: string;
+  loading: boolean;
+  messages: ChatMessage[];
+  onSend: (question?: string) => void;
+  setInput: (value: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, loading]);
 
   return (
-    <div className="mt-5 rounded-2xl border border-[#e6dfd8] bg-[#faf9f5]/85 p-1.5 shadow-sm shadow-[#e6dfd8]/30">
-      <div className="grid gap-1.5 md:grid-cols-4">
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.id;
-          return (
+    <section className="flex min-h-[520px] min-w-0 flex-1 flex-col lg:h-full lg:min-h-0">
+      <div className="shrink-0 flex items-center gap-2 border-b border-[#e6dfd8] px-5 py-3">
+        <MessageSquare className="text-[#a9583e]" size={16} />
+        <h2 className="text-sm font-black">채팅</h2>
+        <span className="text-xs text-[#8e8b82]">선택한 소스에 질문하세요</span>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6" ref={scrollRef}>
+        {error ? (
+          <div className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm font-medium text-rose-800">{error}</div>
+        ) : null}
+
+        {messages.length === 0 ? (
+          <div className="mx-auto flex max-w-2xl flex-col items-center justify-center py-16 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#efe9de] text-[#a9583e]">
+              <MessageSquare size={24} />
+            </div>
+            <h3 className="mt-5 text-lg font-black text-[#141413]">
+              {hasSources ? "소스에 무엇이든 물어보세요" : "소스를 추가하고 질문해보세요"}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-[#6c6a64]">
+              {hasSources
+                ? "체크한 소스의 발화에만 근거해 답하고, 근거가 된 발화를 함께 보여줍니다."
+                : "왼쪽에서 ‘소스 추가’로 리서치 자료를 올리면 대화를 시작할 수 있습니다."}
+            </p>
+            {hasSources ? (
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {CHAT_SUGGESTIONS.map((suggestion) => (
+	                  <button
+	                    className="rounded-full border border-[#e6dfd8] bg-[#faf9f5] px-4 py-2 text-sm font-semibold text-[#3d3d3a] transition hover:border-[#cc785c] hover:bg-white"
+	                    key={suggestion}
+	                    onClick={() => onSend(suggestion)}
+	                    type="button"
+	                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mx-auto grid max-w-2xl gap-4">
+            {messages.map((message, index) => (
+              <ChatBubble key={index} message={message} />
+            ))}
+            {loading ? (
+              <div className="flex items-center gap-2 text-sm text-[#8e8b82]">
+                <Loader2 className="animate-spin" size={16} />
+                답변을 생성하고 있습니다…
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 border-t border-[#e6dfd8] bg-[#faf9f5]/80 px-4 py-3 sm:px-6">
+        <div className="mx-auto flex max-w-2xl items-end gap-2 rounded-2xl border border-[#e6dfd8] bg-[#faf9f5] p-2 shadow-sm">
+          <Textarea
+            className="min-h-11 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+            disabled={!hasSources}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                onSend();
+              }
+            }}
+            placeholder={hasSources ? "질문하거나 창작하세요" : "먼저 소스를 추가하세요"}
+            value={input}
+          />
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <span className="px-1 text-xs font-semibold text-[#8e8b82]">소스 {checkedCount}개</span>
             <button
-              className={cn(
-                "flex min-h-16 items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition",
-                isActive ? "bg-[#141413] text-[#faf9f5] shadow-sm" : "text-[#6c6a64] hover:bg-[#f5f0e8]",
-                tab.disabled && "cursor-not-allowed opacity-45 hover:bg-transparent"
-              )}
-              disabled={tab.disabled}
-              key={tab.id}
-              onClick={() => onChange(tab.id)}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#141413] text-[#faf9f5] transition hover:bg-[#252320] disabled:opacity-40"
+              disabled={!hasSources || !input.trim() || loading}
+              onClick={() => onSend()}
+              title="전송"
               type="button"
             >
-              <span>
-                <span className="block text-sm font-black">{tab.label}</span>
-                <span className={cn("mt-1 block text-xs", isActive ? "text-[#a09d96]" : "text-[#8e8b82]")}>{tab.description}</span>
-              </span>
-              {tab.count ? (
-                <span className={cn("rounded-full px-2.5 py-1 text-xs font-bold", isActive ? "bg-[#252320] text-[#faf9f5]" : "bg-[#efe9de] text-[#6c6a64]")}>
-                  {tab.count}
-                </span>
-              ) : null}
+              {loading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
             </button>
-          );
-        })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ChatBubble({ message }: { message: ChatMessage }) {
+  if (message.role === "user") {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-[#141413] px-4 py-3 text-sm leading-6 text-[#faf9f5]">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[90%] rounded-2xl rounded-bl-sm border border-[#e6dfd8] bg-[#faf9f5] px-4 py-3">
+        <p className="whitespace-pre-wrap text-sm leading-7 text-[#3d3d3a]">{message.content}</p>
+        {message.citations && message.citations.length ? (
+          <div className="mt-3 grid gap-2 border-t border-[#ebe6df] pt-3">
+            <p className="text-xs font-black text-[#6c6a64]">근거 {message.citations.length}개</p>
+            {message.citations.map((citation: Citation, index: number) => (
+              <blockquote className="rounded-xl border-l-2 border-[#cc785c] bg-[#f5f0e8] px-3 py-2 text-xs leading-5 text-[#3d3d3a]" key={index}>
+                <span className="mb-1 block font-bold text-[#6c6a64]">
+                  {citation.participant} · {citation.source_name}
+                </span>
+                {citation.quote}
+              </blockquote>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function ColorChips({ className }: { className?: string }) {
-  const chips = ["#141413", "#cc785c", "#e8a55a", "#5db8a6", "#252320", "#e8e0d2"];
-  return (
-    <div className={cn("flex items-center gap-2", className)} aria-hidden="true">
-      {chips.map((color, index) => (
-        <span
-          className="h-5 w-10 rounded-full border border-black/10 shadow-sm"
-          key={color}
-          style={{ backgroundColor: color, transform: `translateY(${index % 2 ? 2 : 0}px)` }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function WorkbenchHeader({
+function StudioPanel({
+  collapsed,
+  onOpenArtifact,
+  onToggleCollapse,
+  relationshipsCount,
   reportInsightsCount,
-  canDownload,
-  lastSavedAt,
-  onClearDraft,
-  onDownload,
-  recognition,
-  result
+  resultReady
 }: {
+  collapsed: boolean;
+  onOpenArtifact: (kind: ArtifactKind) => void;
+  onToggleCollapse: () => void;
+  relationshipsCount: number;
   reportInsightsCount: number;
-  canDownload: boolean;
-  lastSavedAt: string;
-  onClearDraft: () => void;
-  onDownload: () => void;
-  recognition: RecognitionResponse | null;
-  result: AnalysisResponse | null;
+  resultReady: boolean;
 }) {
-  const helper = result
-    ? "인사이트가 자동으로 보고서에 반영됩니다. 확인 필요 항목만 선택적으로 검토하세요."
-    : recognition
-      ? "자료 구조가 확인되었습니다. 이제 AI 분석을 실행할 수 있습니다."
-      : "리서치 원자료를 추가하면 화자와 섹션을 먼저 인식합니다.";
+  if (collapsed) {
+    return (
+      <aside className="hidden shrink-0 flex-col items-center gap-3 border-l border-[#e6dfd8] bg-[#faf9f5]/60 py-4 lg:flex lg:w-14">
+        <button className="rounded-lg p-1.5 text-[#6c6a64] transition hover:bg-[#efe9de]" onClick={onToggleCollapse} title="스튜디오 열기" type="button">
+          <PanelRightOpen size={18} />
+        </button>
+        <span className="mt-1 text-xs font-bold tracking-wide text-[#8e8b82] [writing-mode:vertical-rl]">스튜디오</span>
+      </aside>
+    );
+  }
+  const artifacts: { kind: ArtifactKind; icon: ReactNode; label: string; description: string; iconClass: string }[] = [
+    {
+      kind: "insights",
+      icon: <ClipboardCheck size={18} />,
+      label: "인사이트",
+      description: resultReady ? `반영 인사이트 ${reportInsightsCount}개` : "분석 후 핵심 발견 검토",
+      iconClass: "bg-rose-50 text-rose-600",
+    },
+    {
+      kind: "affinity",
+      icon: <LayoutGrid size={18} />,
+      label: "어피니티 다이어그램",
+      description: "세그먼트를 주제별로 묶고 재배치",
+      iconClass: "bg-amber-50 text-amber-600",
+    },
+    {
+      kind: "insight-map",
+      icon: <Network size={18} />,
+      label: "인사이트 맵",
+      description: relationshipsCount ? `인사이트 관계 ${relationshipsCount}개` : "인사이트 간 관계 그래프",
+      iconClass: "bg-teal-50 text-teal-600",
+    },
+    {
+      kind: "report",
+      icon: <FileText size={18} />,
+      label: "리포트",
+      description: `반영 인사이트 ${reportInsightsCount}개`,
+      iconClass: "bg-blue-50 text-blue-600",
+    },
+  ];
   return (
-    <header className="rounded-3xl border border-[#e6dfd8] bg-[#faf9f5]/90 p-5 shadow-sm shadow-[#e6dfd8]/50 backdrop-blur sm:p-6">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="amber">CXI Studio</Badge>
-            <Badge variant="blue">리서치 워크벤치</Badge>
-            <Badge variant={result ? "green" : recognition ? "amber" : "muted"}>
-              {result ? "보고서 초안" : recognition ? "자료 인식 완료" : "자료 대기"}
-            </Badge>
-            <Badge variant="muted">{lastSavedAt ? `자동 저장 ${formatSavedTime(lastSavedAt)}` : "자동 저장 준비"}</Badge>
-          </div>
-          <h2 className="mt-4 text-xl font-semibold leading-8 text-[#141413] sm:text-2xl">리서치 원자료를 근거 있는 CX 인사이트로 정리합니다</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6c6a64]">{helper}</p>
+    <aside className="shrink-0 border-t border-[#e6dfd8] bg-[#faf9f5]/60 lg:sticky lg:top-[61px] lg:h-[calc(100vh-61px)] lg:w-80 lg:overflow-y-auto lg:border-l lg:border-t-0">
+      <div className="flex items-center justify-between gap-2 px-4 pt-4">
+        <div className="flex items-center gap-2">
+          <Sparkles className="text-[#a9583e]" size={16} />
+          <h2 className="text-sm font-black">스튜디오</h2>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={onClearDraft} variant="ghost">
-            임시 저장 삭제
-          </Button>
-          <Button disabled={!canDownload} onClick={onDownload} variant="secondary">
-            <Download size={18} />
-            보고서 다운로드
-          </Button>
-          <div className="rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] px-4 py-3">
-            <p className="text-xs font-bold text-[#6c6a64]">보고서 반영 인사이트</p>
-            <p className="mt-1 text-2xl font-black text-[#141413]">{reportInsightsCount}</p>
-          </div>
-        </div>
+        <button className="hidden rounded-lg p-1.5 text-[#6c6a64] transition hover:bg-[#efe9de] lg:block" onClick={onToggleCollapse} title="접기" type="button">
+          <PanelRightClose size={18} />
+        </button>
       </div>
-    </header>
+      <p className="px-4 pt-1 text-xs leading-5 text-[#6c6a64]">분석 결과로 산출물을 만들어 보세요.</p>
+      <div className="grid gap-3 p-4">
+        {artifacts.map((artifact) => (
+          <button
+            className={cn(
+              "rounded-2xl border p-4 text-left transition",
+              resultReady
+                ? "border-[#e6dfd8] bg-[#f5f0e8] hover:border-[#cc785c] hover:bg-[#fff7ef]"
+                : "cursor-not-allowed border-[#e6dfd8] bg-[#f5f0e8] opacity-50"
+            )}
+            disabled={!resultReady}
+            key={artifact.kind}
+            onClick={() => onOpenArtifact(artifact.kind)}
+            type="button"
+          >
+            <div className="flex items-center gap-3">
+              <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", artifact.iconClass)}>
+                {artifact.icon}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-black text-[#252523]">{artifact.label}</p>
+                <p className="mt-0.5 text-xs leading-4 text-[#6c6a64]">{artifact.description}</p>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+      {resultReady ? null : (
+        <p className="px-4 text-xs leading-5 text-[#9c9a94]">소스를 분석하면 산출물을 생성할 수 있습니다.</p>
+      )}
+    </aside>
   );
 }
 
-function InputPanel({
-  canAnalyze,
-  columnMappings,
-  evaluationCriteriaText,
-  file,
-  fileInputRef,
-  inputMode,
-  loading,
+function UploadModal({
   analysisStage,
-  onAnalyze,
-  onFileChange,
-  onMappingChange,
-  onModeChange,
-  previewingTabular,
-  projectName,
-  researchGoal,
-  setEvaluationCriteriaText,
-  setProjectName,
-  setResearchGoal,
-  setSourceName,
-  setTasksText,
+  loading,
+  onAnalyzeText,
+  onClose,
+  onPickFile,
   setText,
-  sourceName,
-  tabularPreview,
-  tasksText,
   text
 }: {
-  canAnalyze: boolean;
-  columnMappings: Record<string, string>;
-  evaluationCriteriaText: string;
-  file: File | null;
-  fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
-  inputMode: "file" | "text";
-  loading: boolean;
   analysisStage: string;
-  onAnalyze: () => void;
-  onFileChange: (file: File | null) => void;
-  onMappingChange: (column: string, field: string) => void;
-  onModeChange: (mode: "file" | "text") => void;
-  previewingTabular: boolean;
-  projectName: string;
-  researchGoal: string;
-  setEvaluationCriteriaText: (value: string) => void;
-  setProjectName: (value: string) => void;
-  setResearchGoal: (value: string) => void;
-  setSourceName: (value: string) => void;
-  setTasksText: (value: string) => void;
+  loading: boolean;
+  onAnalyzeText: () => void;
+  onClose: () => void;
+  onPickFile: (file: File) => void;
   setText: (value: string) => void;
-  sourceName: string;
-  tabularPreview: TabularPreviewResponse | null;
-  tasksText: string;
   text: string;
 }) {
-  const [contextOpen, setContextOpen] = useState(false);
+  const [mode, setMode] = useState<"choose" | "text">("choose");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const chipClass =
+    "inline-flex items-center gap-2 rounded-full border border-[#e6dfd8] bg-[#faf9f5] px-5 py-2.5 text-sm font-bold text-[#252523] shadow-sm transition hover:border-[#cc785c] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50";
 
   return (
-    <Card>
-      <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <SectionKicker icon={<FileUp size={16} />} label="자료 추가" />
-          <h3 className="mt-2 text-lg font-black">분석할 원자료를 올려주세요</h3>
-          <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
-            {inputMode === "file"
-              ? "파일을 올리면 바로 분석을 시작합니다."
-              : "텍스트를 붙여넣고 분석 버튼을 누르세요."}
-          </p>
-        </div>
-        <Tabs onValueChange={(value) => onModeChange(value as "file" | "text")} value={inputMode}>
-          <TabsList>
-            <TabsTrigger value="file">파일</TabsTrigger>
-            <TabsTrigger value="text">텍스트</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </CardHeader>
-      <CardContent className="grid gap-5">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="프로젝트명">
-            <Input onChange={(event) => setProjectName(event.target.value)} value={projectName} />
-          </Field>
-          <Field label="세션/자료명">
-            <Input onChange={(event) => setSourceName(event.target.value)} value={sourceName} />
-          </Field>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-8" onClick={onClose}>
+      <div
+        className="w-full max-w-2xl overflow-hidden rounded-3xl border border-[#e6dfd8] bg-[#faf9f5] shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[#e6dfd8] px-5 py-3">
+          <div className="flex items-center gap-2">
+            <FileUp className="text-[#a9583e]" size={16} />
+            <h2 className="text-base font-black">소스 추가</h2>
+          </div>
+          <button className="rounded-full p-2 text-[#6c6a64] transition hover:bg-[#efe9de]" onClick={onClose} title="닫기" type="button">
+            <X size={18} />
+          </button>
         </div>
 
-        <Tabs value={inputMode}>
-          <TabsContent value="file">
+        <div className="p-5">
+          {mode === "choose" ? (
             <div
-              className={cn(
-                "group rounded-3xl border border-dashed p-8 transition",
-                loading ? "border-[#cc785c] bg-[#efe9de]" : file ? "border-[#cc785c] bg-[#efe9de]" : "border-[#e6dfd8] bg-[#f5f0e8] hover:border-[#cc785c] hover:bg-[#faf9f5]"
-              )}
+              className="rounded-3xl border border-dashed border-[#cbb9ab] bg-[#f5f0e8] px-6 py-12 text-center transition"
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
-                onFileChange(event.dataTransfer.files?.[0] ?? null);
+                const dropped = event.dataTransfer.files?.[0];
+                if (dropped) onPickFile(dropped);
               }}
             >
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#faf9f5] text-[#a9583e] shadow-sm">
+                {loading ? <Loader2 className="animate-spin" size={24} /> : <Upload size={24} />}
+              </div>
+              <p className="mt-5 text-lg font-bold text-[#252523]">{loading ? analysisStage : "또는 파일 드롭"}</p>
+              <p className="mt-1 text-sm text-[#8e8b82]">TXT, Markdown, CSV, XLSX 파일을 지원합니다</p>
+              <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+                <button className={chipClass} disabled={loading} onClick={() => fileInputRef.current?.click()} type="button">
+                  <Upload size={16} />
+                  파일 업로드
+                </button>
+                <button className={chipClass} disabled={loading} onClick={() => setMode("text")} type="button">
+                  <ClipboardPaste size={16} />
+                  복사된 텍스트
+                </button>
+              </div>
               <input
                 accept=".txt,.md,.markdown,.csv,.xlsx"
                 className="hidden"
-                onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  const picked = event.target.files?.[0];
+                  if (picked) onPickFile(picked);
+                }}
                 ref={fileInputRef}
                 type="file"
               />
-              <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#faf9f5] text-[#252523] shadow-sm">
-                    {loading ? <Loader2 className="animate-spin" size={22} /> : <FileText size={22} />}
-                  </div>
-                  <div>
-                    <p className="text-base font-black text-[#141413]">
-                      {loading ? analysisStage : file ? file.name : "파일을 끌어오거나 선택하세요"}
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
-                      {loading
-                        ? "분석이 완료되면 Report 탭으로 이동합니다."
-                        : "TXT, Markdown, CSV, XLSX 파일을 지원합니다."}
-                    </p>
-                  </div>
-                </div>
-                {!loading ? (
-                  <div className="flex gap-2">
-                    <Button onClick={() => fileInputRef.current?.click()} type="button" variant="secondary">
-                      파일 선택
-                    </Button>
-                    {file ? (
-                      <Button onClick={() => onFileChange(null)} type="button" variant="ghost">
-                        해제
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
             </div>
-            {file && !loading ? (
-              <UploadedFileQueue
-                file={file}
-                previewingTabular={previewingTabular}
-                tabularPreview={tabularPreview}
-              />
-            ) : null}
-            {tabularPreview && !loading ? (
-              <TabularMappingPanel
-                columnMappings={columnMappings}
-                onMappingChange={onMappingChange}
-                preview={tabularPreview}
-              />
-            ) : null}
-          </TabsContent>
-          <TabsContent value="text">
+          ) : (
             <div className="grid gap-4">
-              <Field label="분석할 원자료">
-                <Textarea
-                  className={cn("min-h-64", text.trim() ? "border-[#cc785c] focus-visible:ring-[#cc785c]" : "")}
-                  onChange={(event) => setText(event.target.value)}
-                  placeholder="인터뷰 발화, 관찰 메모, 설문 응답 텍스트를 여기에 붙여넣으세요"
-                  value={text}
-                />
-                {text.trim() ? (
-                  <span className="text-xs text-[#8e8b82]">{text.trim().length.toLocaleString()}자</span>
-                ) : null}
-              </Field>
-              <Button className="w-full" disabled={loading || !canAnalyze} onClick={onAnalyze} type="button">
+              <button
+                className="flex w-fit items-center gap-1.5 text-xs font-bold text-[#8e8b82] transition hover:text-[#252523]"
+                onClick={() => setMode("choose")}
+                type="button"
+              >
+                <ArrowLeft size={14} />
+                뒤로
+              </button>
+              <Textarea
+                className={cn("min-h-64", text.trim() ? "border-[#cc785c] focus-visible:ring-[#cc785c]" : "")}
+                onChange={(event) => setText(event.target.value)}
+                placeholder="인터뷰 발화, 관찰 메모, 설문 응답 텍스트를 여기에 붙여넣으세요"
+                value={text}
+              />
+              {text.trim() ? <span className="text-xs text-[#8e8b82]">{text.trim().length.toLocaleString()}자</span> : null}
+              <Button className="w-full" disabled={loading || !text.trim()} onClick={onAnalyzeText} type="button">
                 {loading ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
                 {loading ? analysisStage : "분석 시작"}
               </Button>
             </div>
-          </TabsContent>
-        </Tabs>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
-        <button
-          className="flex items-center gap-2 text-xs font-bold text-[#8e8b82] transition hover:text-[#252523]"
-          onClick={() => setContextOpen((open) => !open)}
-          type="button"
-        >
-          <ChevronDown className={cn("transition-transform", contextOpen && "rotate-180")} size={14} />
-          연구 맥락 입력 (선택사항 — 비워도 분석됩니다)
-        </button>
+function ArtifactModal({
+  excludedCount,
+  kind,
+  onClose,
+  onDownload,
+  onMoveSegment,
+  onUpdateInsight,
+  recognition,
+  reportInsights,
+  reportLoading,
+  reportMarkdown,
+  result,
+  reviewedInsights,
+  segmentById,
+  segmentTopicOverrides
+}: {
+  excludedCount: number;
+  kind: ArtifactKind;
+  onClose: () => void;
+  onDownload: () => void;
+  onMoveSegment: (segmentId: string, topicId: string) => void;
+  onUpdateInsight: (insightId: string, updates: Partial<ReviewedInsight>) => void;
+  recognition: RecognitionResponse | null;
+  reportInsights: ReviewedInsight[];
+  reportLoading: boolean;
+  reportMarkdown: string;
+  result: AnalysisResponse;
+  reviewedInsights: ReviewedInsight[];
+  segmentById: Map<string, Segment>;
+  segmentTopicOverrides: Record<string, string>;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
-        {contextOpen ? (
-          <div className="grid gap-4 rounded-2xl border border-[#e6dfd8] bg-[#f5f0e8] p-4 lg:grid-cols-3">
-            <Field label="연구 목적">
-              <Textarea className="min-h-28" onChange={(event) => setResearchGoal(event.target.value)} value={researchGoal} />
-            </Field>
-            <Field label="평가 태스크">
-              <Textarea className="min-h-28" onChange={(event) => setTasksText(event.target.value)} value={tasksText} />
-            </Field>
-            <Field label="평가 기준">
-              <Textarea className="min-h-28" onChange={(event) => setEvaluationCriteriaText(event.target.value)} value={evaluationCriteriaText} />
-            </Field>
+  const titles: Record<ArtifactKind, string> = {
+    insights: "인사이트",
+    affinity: "어피니티 다이어그램",
+    "insight-map": "인사이트 맵",
+    report: "리포트",
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm sm:p-6" onClick={onClose}>
+      <div
+        className="flex h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-[#e6dfd8] bg-[#faf9f5] shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[#e6dfd8] px-5 py-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="text-[#a9583e]" size={16} />
+            <h2 className="text-base font-black">{titles[kind]}</h2>
           </div>
-        ) : null}
-      </CardContent>
-    </Card>
+          <button className="rounded-full p-2 text-[#6c6a64] transition hover:bg-[#efe9de]" onClick={onClose} title="닫기" type="button">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          {kind === "insights" ? (
+            <FindingsWorkspace
+              excludedCount={excludedCount}
+              onUpdateInsight={onUpdateInsight}
+              reviewedInsights={reviewedInsights}
+              segmentById={segmentById}
+            />
+          ) : null}
+          {kind === "affinity" ? (
+            <AffinityBoard
+              onMoveSegment={onMoveSegment}
+              result={result}
+              segmentById={segmentById}
+              segmentTopicOverrides={segmentTopicOverrides}
+            />
+          ) : null}
+          {kind === "insight-map" ? (
+            <InsightGraph insights={result.analysis.insights} relationships={result.analysis.relationships ?? []} />
+          ) : null}
+          {kind === "report" ? (
+            <ReportPanel
+              excludedCount={excludedCount}
+              onDownload={onDownload}
+              recognition={recognition}
+              reportInsights={reportInsights}
+              reportLoading={reportLoading}
+              reportMarkdown={reportMarkdown}
+              result={result}
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
 function SourceLibraryPanel({
   activeSourceId,
   analysisStage,
+  checkedSourceIds,
   loading,
   onAnalyzeSource,
   onDeleteSource,
   onSelectSource,
+  onToggleSource,
   sources
 }: {
   activeSourceId: string;
   analysisStage: string;
+  checkedSourceIds: string[];
   loading: boolean;
   onAnalyzeSource: (source: SourceRecord) => void;
   onDeleteSource: (source: SourceRecord) => void;
   onSelectSource: (sourceId: string) => void;
+  onToggleSource: (sourceId: string) => void;
   sources: SourceRecord[];
 }) {
   return (
@@ -1280,7 +1587,7 @@ function SourceLibraryPanel({
         <div>
           <SectionKicker icon={<FolderOpen size={16} />} label="소스 라이브러리" />
           <h3 className="mt-2 text-lg font-black">프로젝트 안의 원자료를 따로 관리합니다</h3>
-          <p className="mt-1 text-sm leading-6 text-[#6c6a64]">각 파일은 독립적으로 인식·분석되고, 분석 완료 소스가 2개 이상이면 종합 단계로 이어집니다.</p>
+          <p className="mt-1 text-sm leading-6 text-[#6c6a64]">각 파일은 독립적으로 인식·분석됩니다.</p>
         </div>
         <Badge variant={sources.length ? "blue" : "muted"}>{sources.length}개 소스</Badge>
       </CardHeader>
@@ -1298,9 +1605,17 @@ function SourceLibraryPanel({
                   )}
                   key={source.id}
                 >
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <button className="min-w-0 text-left" onClick={() => onSelectSource(source.id)} type="button">
-                      <div className="flex min-w-0 items-center gap-3">
+                  <div className="grid gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <button
+                        aria-label="채팅 소스로 선택"
+                        className="shrink-0"
+                        onClick={() => onToggleSource(source.id)}
+                        type="button"
+                      >
+                        <CheckBox checked={checkedSourceIds.includes(source.id)} />
+                      </button>
+                      <button className="flex min-w-0 items-center gap-3 text-left" onClick={() => onSelectSource(source.id)} type="button">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#faf9f5] text-[#a9583e]">
                           {source.source_type === "CSV" || source.source_type === "엑셀" ? <Database size={18} /> : <FileText size={18} />}
                         </div>
@@ -1310,14 +1625,14 @@ function SourceLibraryPanel({
                             {source.detected_label} · 세그먼트 {source.segment_count}개 · 참가자 {source.participant_count || "?"}명
                           </p>
                         </div>
-                      </div>
-                    </button>
-                    <div className="flex flex-wrap items-center gap-2">
+                      </button>
+                    </div>
+	                    <div className="flex flex-wrap items-center gap-2 pl-7">
                       <Badge variant={source.status === "분석완료" ? "green" : source.status === "분석중" || source.status === "오류" ? "amber" : "muted"}>
                         {isAnalyzing ? "분석중" : source.status}
                       </Badge>
                       {source.insight_count ? <Badge variant="blue">인사이트 {source.insight_count}</Badge> : null}
-                      <Button disabled={loading} onClick={() => onAnalyzeSource(source)} size="sm" type="button">
+	                      <Button className="max-w-full" disabled={loading} onClick={() => onAnalyzeSource(source)} size="sm" type="button">
                         {isAnalyzing ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
                         {source.status === "분석완료" ? "다시 분석" : "개별 분석"}
                       </Button>
@@ -1335,161 +1650,8 @@ function SourceLibraryPanel({
           </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-[#e6dfd8] bg-[#f5f0e8] p-6 text-sm leading-6 text-[#6c6a64]">
-            아직 저장된 소스가 없습니다. 위에 파일을 드롭하면 프로젝트가 자동으로 준비되고 소스 라이브러리에 추가됩니다.
+            아직 저장된 소스가 없습니다. &apos;소스 추가&apos;로 파일을 올리면 소스 라이브러리에 추가됩니다.
           </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function UploadedFileQueue({
-  file,
-  previewingTabular,
-  tabularPreview
-}: {
-  file: File;
-  previewingTabular: boolean;
-  tabularPreview: TabularPreviewResponse | null;
-}) {
-  const isTabular = isTabularFile(file.name);
-  const status = isTabular ? (previewingTabular ? "컬럼 읽는 중" : tabularPreview ? "매핑 확인 필요" : "표 데이터") : "인식 대기";
-  return (
-    <div className="rounded-2xl border border-[#e6dfd8] bg-[#faf9f5] p-3">
-      <div className="flex items-center justify-between gap-3 rounded-xl bg-[#f5f0e8] p-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#efe9de] text-[#a9583e]">
-            {isTabular ? <Database size={18} /> : <FileText size={18} />}
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-black text-[#252523]">{file.name}</p>
-            <p className="mt-1 text-xs font-semibold text-[#6c6a64]">
-              {formatFileSize(file.size)} · {status}
-            </p>
-          </div>
-        </div>
-        <Badge variant={tabularPreview ? "amber" : "muted"}>{status}</Badge>
-      </div>
-    </div>
-  );
-}
-
-function TabularMappingPanel({
-  columnMappings,
-  onMappingChange,
-  preview
-}: {
-  columnMappings: Record<string, string>;
-  onMappingChange: (column: string, field: string) => void;
-  preview: TabularPreviewResponse;
-}) {
-  const requiredMappedCount = preview.required_fields.filter((field) => Object.values(columnMappings).includes(field)).length;
-  const evidenceFields = new Set(["task_success", "score", "error_count", "observation_note", "quote"]);
-  const evidenceMappedCount = Object.values(columnMappings).filter((field) => evidenceFields.has(field)).length;
-
-  return (
-    <div className="overflow-hidden rounded-3xl border border-[#e6dfd8] bg-[#faf9f5]">
-      <div className="border-b border-[#e6dfd8] bg-[#f5f0e8] p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <SectionKicker icon={<TableProperties size={16} />} label="CSV/XLSX 컬럼 매핑" />
-            <h4 className="mt-2 text-base font-black text-[#141413]">{preview.source_name}</h4>
-            <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
-              {preview.row_count}개 행의 헤더와 샘플값을 기준으로 시스템 필드를 제안했습니다. 애매한 컬럼은 직접 바꿀 수 있습니다.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant={requiredMappedCount >= preview.required_fields.length ? "green" : "amber"}>
-              필수 {requiredMappedCount}/{preview.required_fields.length}
-            </Badge>
-            <Badge variant={evidenceMappedCount ? "blue" : "muted"}>근거 컬럼 {evidenceMappedCount}</Badge>
-          </div>
-        </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] border-collapse text-left">
-          <thead className="bg-[#faf9f5] text-xs font-black text-[#6c6a64]">
-            <tr>
-              <th className="border-b border-r border-[#e6dfd8] px-4 py-3">원본 컬럼</th>
-              <th className="border-b border-r border-[#e6dfd8] px-4 py-3">시스템 필드</th>
-              <th className="border-b border-[#e6dfd8] px-4 py-3">샘플값</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#e6dfd8]">
-            {preview.columns.map((column) => {
-              const selectedField = columnMappings[column.source_column] ?? column.suggested_field;
-              const ignored = selectedField === "ignore";
-              return (
-                <tr className={cn("transition hover:bg-[#f5f0e8]", ignored && "opacity-60")} key={column.source_column}>
-                  <td className="border-r border-[#e6dfd8] px-4 py-3 align-top">
-                    <div className="flex items-start gap-2">
-                      <span className={cn("mt-1 h-2.5 w-2.5 rounded-full", column.confidence === "높음" ? "bg-[#5db8a6]" : column.confidence === "보통" ? "bg-[#e8a55a]" : "bg-[#c6bbae]")} />
-                      <div>
-                        <p className="font-mono text-sm font-bold text-[#252523]">{column.source_column}</p>
-                        <p className="mt-1 text-xs font-semibold text-[#8e8b82]">추정 신뢰도 {column.confidence}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="border-r border-[#e6dfd8] px-4 py-3 align-top">
-                    <select
-                      className="h-10 w-full rounded-lg border border-[#e6dfd8] bg-[#faf9f5] px-3 text-sm font-semibold text-[#252523] outline-none transition focus:border-[#cc785c] focus:ring-4 focus:ring-[#e6dfd8]"
-                      onChange={(event) => onMappingChange(column.source_column, event.target.value)}
-                      value={selectedField}
-                    >
-                      {preview.standard_fields.map((field) => (
-                        <option key={field.value} value={field.value}>
-                          {field.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="px-4 py-3 align-top">
-                    <div className="flex flex-wrap gap-2">
-                      {column.sample_values.length ? (
-                        column.sample_values.map((value, index) => (
-                          <span className="max-w-[240px] truncate rounded-lg border border-[#e6dfd8] bg-[#f5f0e8] px-2.5 py-1 font-mono text-xs text-[#6c6a64]" key={`${column.source_column}-${index}`}>
-                            {value}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="rounded-lg bg-[#f5f0e8] px-2.5 py-1 text-xs font-semibold text-[#8e8b82]">샘플 없음</span>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {preview.warnings.length ? (
-        <div className="border-t border-[#e6dfd8] bg-[#fff7e8] p-4 text-sm font-semibold text-[#8a6127]">
-          {preview.warnings.join(" ")}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function EmptyState({ loading, analysisStage }: { loading: boolean; analysisStage: string }) {
-  return (
-    <Card className="border-dashed">
-      <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#efe9de] text-[#a9583e]">
-          {loading ? <Loader2 className="animate-spin" size={24} /> : <Sparkles size={24} />}
-        </div>
-        <h3 className="mt-4 text-lg font-black">{loading ? "분석 중입니다" : "분석 결과가 이곳에 정리됩니다"}</h3>
-        {loading ? (
-          <div className="mt-5 w-full max-w-md rounded-2xl bg-[#f5f0e8] p-4 text-left">
-            <p className="text-sm font-bold text-[#252523]">{analysisStage}</p>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8e0d2]">
-              <motion.div className="h-full rounded-full bg-[#cc785c]" initial={{ width: "12%" }} animate={{ width: "88%" }} transition={{ duration: 2.2, repeat: Infinity, repeatType: "reverse" }} />
-            </div>
-          </div>
-        ) : (
-          <p className="mt-2 max-w-xl text-sm leading-6 text-[#6c6a64]">Sources 탭에서 파일을 올리거나 텍스트를 입력하면 분석이 시작됩니다.</p>
         )}
       </CardContent>
     </Card>
@@ -1497,20 +1659,23 @@ function EmptyState({ loading, analysisStage }: { loading: boolean; analysisStag
 }
 
 function FindingsWorkspace({
-  attentionCount,
+  excludedCount,
   onUpdateInsight,
   reviewedInsights,
   segmentById,
 }: {
-  attentionCount: number;
+  excludedCount: number;
   onUpdateInsight: (insightId: string, updates: Partial<ReviewedInsight>) => void;
   reviewedInsights: ReviewedInsight[];
   segmentById: Map<string, Segment>;
 }) {
   const [selectedInsightId, setSelectedInsightId] = useState(reviewedInsights[0]?.id ?? "");
-  const [filter, setFilter] = useState<"all" | FindingStatus>("all");
   const selectedInsight = reviewedInsights.find((insight) => insight.id === selectedInsightId) ?? reviewedInsights[0];
-  const filteredInsights = reviewedInsights.filter((insight) => filter === "all" || insight.findingStatus === filter);
+  // 기본은 전부 반영. 제외(hidden)한 항목은 목록 맨 아래로 내려 흐리게 표시한다.
+  const orderedInsights = [...reviewedInsights].sort(
+    (a, b) => (a.findingStatus === "hidden" ? 1 : 0) - (b.findingStatus === "hidden" ? 1 : 0)
+  );
+  const includedCount = reviewedInsights.length - excludedCount;
 
   useEffect(() => {
     if (!reviewedInsights.length) {
@@ -1522,22 +1687,6 @@ function FindingsWorkspace({
     }
   }, [reviewedInsights, selectedInsightId]);
 
-  function findingStatusLabel(status: FindingStatus) {
-    switch (status) {
-      case "auto_included": return "자동 반영";
-      case "needs_attention": return "확인 필요";
-      case "hidden": return "숨김";
-      case "pinned": return "고정";
-      case "edited": return "수정됨";
-    }
-  }
-
-  function findingStatusBadgeVariant(status: FindingStatus) {
-    if (status === "auto_included" || status === "pinned") return "green" as const;
-    if (status === "needs_attention") return "amber" as const;
-    return "muted" as const;
-  }
-
   function riskFlagLabel(flag: RiskFlag) {
     switch (flag) {
       case "weak_evidence": return "근거 부족";
@@ -1546,78 +1695,76 @@ function FindingsWorkspace({
     }
   }
 
+  function toggleInclude(insight: ReviewedInsight) {
+    onUpdateInsight(insight.id, {
+      findingStatus: insight.findingStatus === "hidden" ? "auto_included" : "hidden",
+    });
+  }
+
   return (
     <div className="grid gap-5">
       <div className="grid gap-5 2xl:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)]">
         <Card className="overflow-hidden">
-          <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <SectionKicker icon={<ClipboardCheck size={16} />} label="Findings" />
-              <h3 className="mt-2 text-lg font-black">인사이트 결과가 자동으로 반영되었습니다</h3>
-              {attentionCount > 0 ? (
-                <p className="mt-1 text-sm font-semibold text-[#a9583e]">확인 필요 {attentionCount}개가 있습니다</p>
-              ) : null}
-            </div>
-            <div className="grid grid-cols-4 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
-              {(["all", "auto_included", "needs_attention", "hidden"] as const).map((status) => (
-                <button
-                  className={cn(
-                    "rounded-lg px-3 py-2 transition",
-                    filter === status && "bg-[#faf9f5] text-[#141413] shadow-sm"
-                  )}
-                  key={status}
-                  onClick={() => setFilter(status)}
-                  type="button"
-                >
-                  {status === "all" ? "전체" : findingStatusLabel(status)}
-                </button>
-              ))}
-            </div>
+          <CardHeader>
+            <SectionKicker icon={<ClipboardCheck size={16} />} label="Findings" />
+            <h3 className="mt-2 text-lg font-black">모든 인사이트가 리포트에 반영됩니다</h3>
+            <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
+              반영 {includedCount}개{excludedCount > 0 ? ` · 제외 ${excludedCount}개` : ""} · 빼고 싶은 항목은 카드의 ‘제외’를 누르세요.
+            </p>
           </CardHeader>
           <CardContent className="max-h-[720px] overflow-y-auto bg-[#f5f0e8] p-4">
             <div className="grid gap-3">
-              {filteredInsights.length ? (
-                filteredInsights.map((insight, index) => {
-                  const isSelected = insight.id === selectedInsight?.id;
-                  return (
-                    <button
-                      className={cn(
-                        "relative rounded-2xl border bg-[#faf9f5] p-4 text-left shadow-sm transition hover:border-[#cc785c]/60",
-                        isSelected ? "border-[#cc785c] ring-1 ring-[#cc785c]/30" : "border-[#e6dfd8]",
-                        insight.findingStatus === "hidden" && "opacity-60"
-                      )}
-                      key={insight.id}
-                      onClick={() => setSelectedInsightId(insight.id)}
-                      type="button"
-                    >
-                      {isSelected ? <span className="absolute bottom-3 left-0 top-3 w-1 rounded-r-full bg-[#cc785c]" /> : null}
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex flex-wrap gap-2">
-                          <Badge variant={findingStatusBadgeVariant(insight.findingStatus)}>
-                            {findingStatusLabel(insight.findingStatus)}
-                          </Badge>
-                          {insight.riskFlags.map((flag) => (
-                            <Badge key={flag} variant="muted">{riskFlagLabel(flag)}</Badge>
-                          ))}
-                          <Badge variant="muted">{readableInsightType(insight.type)}</Badge>
-                        </div>
-                        <span className="text-xs font-black text-[#8e8b82]">{index + 1}</span>
+              {orderedInsights.map((insight, index) => {
+                const isSelected = insight.id === selectedInsight?.id;
+                const isExcluded = insight.findingStatus === "hidden";
+                return (
+                  <div
+                    className={cn(
+                      "relative cursor-pointer rounded-2xl border bg-[#faf9f5] p-4 text-left shadow-sm transition hover:border-[#cc785c]/60",
+                      isSelected ? "border-[#cc785c] ring-1 ring-[#cc785c]/30" : "border-[#e6dfd8]",
+                      isExcluded && "opacity-55"
+                    )}
+                    key={insight.id}
+                    onClick={() => setSelectedInsightId(insight.id)}
+                  >
+                    {isSelected ? <span className="absolute bottom-3 left-0 top-3 w-1 rounded-r-full bg-[#cc785c]" /> : null}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant={isExcluded ? "muted" : "green"}>{isExcluded ? "제외됨" : "반영"}</Badge>
+                        {insight.riskFlags.map((flag) => (
+                          <Badge key={flag} variant="muted">{riskFlagLabel(flag)}</Badge>
+                        ))}
+                        <Badge variant="muted">{readableInsightType(insight.type)}</Badge>
                       </div>
-                      <h4 className="mt-3 line-clamp-2 text-sm font-black leading-6 text-[#141413]">{insight.title}</h4>
-                      <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#6c6a64]">{insight.summary}</p>
-                      <div className="mt-4 flex flex-wrap gap-2 border-t border-[#ebe6df] pt-3">
+                      <span className="text-xs font-black text-[#8e8b82]">{index + 1}</span>
+                    </div>
+                    <h4 className={cn("mt-3 line-clamp-2 text-sm font-black leading-6 text-[#141413]", isExcluded && "line-through")}>{insight.title}</h4>
+                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#6c6a64]">{insight.summary}</p>
+                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-[#ebe6df] pt-3">
+                      <div className="flex flex-wrap gap-2">
                         <span className="text-xs font-bold text-[#a9583e]">영향도 {insight.severity}</span>
                         <span className="text-xs font-bold text-[#6c6a64]">빈도 {insight.frequency}</span>
                         <span className="text-xs font-bold text-[#6c6a64]">신뢰도 {insight.confidence}</span>
                       </div>
-                    </button>
-                  );
-                })
-              ) : (
-                <div className="rounded-2xl border border-dashed border-[#e6dfd8] bg-[#faf9f5] p-8 text-center text-sm text-[#6c6a64]">
-                  이 필터에 해당하는 인사이트가 없습니다.
-                </div>
-              )}
+                      <button
+                        className={cn(
+                          "flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-bold transition",
+                          isExcluded
+                            ? "bg-[#141413] text-[#faf9f5] hover:bg-[#252320]"
+                            : "bg-[#efe9de] text-[#6c6a64] hover:bg-[#e6dccb] hover:text-[#8e3c29]"
+                        )}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleInclude(insight);
+                        }}
+                        type="button"
+                      >
+                        {isExcluded ? <><BadgeCheck size={13} />포함</> : <><CircleSlash size={13} />제외</>}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -1659,30 +1806,22 @@ function InsightInspector({
           <SectionKicker icon={<Sparkles size={16} />} label="상세 검수" />
           <h3 className="mt-2 text-lg font-black">근거와 제안을 함께 확인하세요</h3>
         </div>
-        <div className="flex gap-2 rounded-xl bg-[#efe9de] p-1 text-xs font-bold text-[#6c6a64]">
-          <button
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
-              insight.findingStatus === "pinned" && "bg-[#faf9f5] text-[#141413] shadow-sm"
-            )}
-            onClick={() => onUpdateInsight(insight.id, { findingStatus: "pinned" })}
-            type="button"
-          >
-            <BadgeCheck size={14} />
-            고정
-          </button>
-          <button
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 transition",
-              insight.findingStatus === "hidden" && "bg-[#faf9f5] text-[#141413] shadow-sm"
-            )}
-            onClick={() => onUpdateInsight(insight.id, { findingStatus: "hidden" })}
-            type="button"
-          >
-            <CircleSlash size={14} />
-            숨기기
-          </button>
-        </div>
+        <button
+          className={cn(
+            "flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold transition",
+            insight.findingStatus === "hidden"
+              ? "bg-[#141413] text-[#faf9f5] hover:bg-[#252320]"
+              : "bg-[#efe9de] text-[#6c6a64] hover:bg-[#e6dccb] hover:text-[#8e3c29]"
+          )}
+          onClick={() =>
+            onUpdateInsight(insight.id, {
+              findingStatus: insight.findingStatus === "hidden" ? "auto_included" : "hidden",
+            })
+          }
+          type="button"
+        >
+          {insight.findingStatus === "hidden" ? <><BadgeCheck size={15} />리포트에 포함</> : <><CircleSlash size={15} />리포트에서 제외</>}
+        </button>
       </CardHeader>
       <CardContent className="grid gap-5">
         <div>
@@ -1758,17 +1897,19 @@ function InsightInspector({
 }
 
 function ReportPanel({
-  attentionCount,
+  excludedCount,
   onDownload,
   recognition,
   reportInsights,
+  reportLoading,
   reportMarkdown,
   result
 }: {
-  attentionCount: number;
+  excludedCount: number;
   onDownload: () => void;
   recognition: RecognitionResponse | null;
   reportInsights: ReviewedInsight[];
+  reportLoading: boolean;
   reportMarkdown: string;
   result: AnalysisResponse;
 }) {
@@ -1779,15 +1920,15 @@ function ReportPanel({
           <SectionKicker icon={<FileText size={16} />} label="4. 보고서 초안" />
           <h3 className="mt-2 text-lg font-black">자동 반영된 인사이트로 보고서를 구성했습니다</h3>
         </div>
-        <Button disabled={!reportMarkdown} onClick={onDownload} variant="secondary">
-          <Download size={18} />
-          Markdown 다운로드
+        <Button disabled={!reportMarkdown || reportLoading} onClick={onDownload} variant="secondary">
+          {reportLoading ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+          {reportLoading ? "Markdown 준비 중" : "Markdown 다운로드"}
         </Button>
       </CardHeader>
       <CardContent>
-        {attentionCount > 0 && (
-          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-            확인 필요 {attentionCount}개 — Findings 탭에서 검토하세요.
+        {excludedCount > 0 && (
+          <div className="mb-4 rounded-xl border border-[#e6dfd8] bg-[#f5f0e8] px-4 py-3 text-sm font-semibold text-[#6c6a64]">
+            제외한 {excludedCount}개는 리포트에 포함되지 않았습니다.
           </div>
         )}
         {reportInsights.length ? (
@@ -1829,50 +1970,6 @@ function ReportPanel({
   );
 }
 
-function SynthesisPanel({
-  onMoveSegment,
-  result,
-  segmentById,
-  segmentTopicOverrides,
-  sources,
-}: {
-  onMoveSegment: (segmentId: string, topicId: string) => void;
-  result: AnalysisResponse | null;
-  segmentById: Map<string, Segment>;
-  segmentTopicOverrides: Record<string, string>;
-  sources: SourceRecord[];
-}) {
-  const analyzedSources = sources.filter((source) => source.status === "분석완료");
-  return (
-    <div className="grid gap-5">
-      <Card>
-        <CardHeader>
-          <SectionKicker icon={<Network size={16} />} label="Synthesis" />
-          <h3 className="mt-2 text-lg font-black">소스 간 패턴을 연결하는 단계입니다</h3>
-          <p className="mt-1 text-sm leading-6 text-[#6c6a64]">
-            개별 분석이 완료된 소스들의 인사이트를 모아 반복 패턴, 소스별 특이점, 상충되는 발견을 분리합니다.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <MetricCard label="전체 소스" value={`${sources.length}개`} />
-            <MetricCard label="분석 완료" value={`${analyzedSources.length}개`} />
-            <MetricCard label="필요 조건" value="2개 이상" />
-          </div>
-        </CardContent>
-      </Card>
-      {result ? (
-        <AffinityBoard
-          onMoveSegment={onMoveSegment}
-          result={result}
-          segmentById={segmentById}
-          segmentTopicOverrides={segmentTopicOverrides}
-        />
-      ) : null}
-    </div>
-  );
-}
-
 function AffinityBoard({
   onMoveSegment,
   result,
@@ -1884,7 +1981,16 @@ function AffinityBoard({
   segmentById: Map<string, Segment>;
   segmentTopicOverrides: Record<string, string>;
 }) {
-  const topicOptions = result.analysis.topics?.slice(0, 6) ?? [];
+  const topicOptions = useMemo(
+    () =>
+      result.analysis.insights.slice(0, 6).map((insight) => ({
+        id: insight.id,
+        topic_name: insight.title,
+        summary: insight.summary,
+        segment_ids: getEvidenceSegmentIds(insight),
+      })),
+    [result.analysis.insights]
+  );
   const palettes = [
     {
       rail: "from-amber-400 to-orange-400",
@@ -1917,7 +2023,7 @@ function AffinityBoard({
   const topicSegmentIds = useMemo(() => {
     const map = new Map<string, string[]>();
     topicOptions.forEach((topic) => map.set(topic.id, []));
-    (result.analysis.topics ?? []).forEach((topic) => {
+    topicOptions.forEach((topic) => {
       topic.segment_ids.forEach((segmentId) => {
         const overrideTopicId = segmentTopicOverrides[segmentId];
         const targetTopicId = overrideTopicId || topic.id;
@@ -1929,19 +2035,23 @@ function AffinityBoard({
       });
     });
     return map;
-  }, [result.analysis.topics, segmentTopicOverrides, topicOptions]);
+  }, [segmentTopicOverrides, topicOptions]);
 
   if (!topicOptions.length) {
-    return null;
+    return (
+      <p className="py-6 text-center text-sm text-[#9c9a94]">
+        인사이트 근거 정보가 없습니다. 소스를 분석하면 인사이트별 근거 발화가 표시됩니다.
+      </p>
+    );
   }
 
   return (
     <Card className="overflow-hidden">
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-	          <SectionKicker icon={<Network size={16} />} label="어피니티 보드" />
-		          <h3 className="mt-2 text-lg font-black">발화가 어떤 주제로 모였는지 보드에서 훑어보세요</h3>
-		          <p className="mt-1 text-sm leading-6 text-slate-500">어색하게 묶인 포스트잇은 끌어서 다른 주제 영역에 놓을 수 있습니다.</p>
+		          <SectionKicker icon={<Network size={16} />} label="어피니티 보드" />
+			          <h3 className="mt-2 text-lg font-black">인사이트별 근거 발화를 훑어보세요</h3>
+			          <p className="mt-1 text-sm leading-6 text-slate-500">어색하게 연결된 근거는 끌어서 다른 인사이트 영역에 놓을 수 있습니다.</p>
         </div>
         <Badge variant="blue">{topicOptions.length}개 주제</Badge>
       </CardHeader>
@@ -2027,7 +2137,7 @@ function AffinityBoard({
 		                      );
 		                    }) : (
 	                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white/60 p-5 text-sm font-semibold leading-6 text-slate-500">
-	                        이 묶음에 연결된 발화가 없습니다. 다른 카드의 묶음을 변경하면 이곳에 표시됩니다.
+		                        이 인사이트에 연결된 발화가 없습니다. 다른 카드의 근거를 이동하면 이곳에 표시됩니다.
 	                      </div>
 	                    )}
 	                  </div>
@@ -2078,14 +2188,6 @@ function ReportSection({ children, title }: { children: ReactNode; title: string
   );
 }
 
-function MotionBlock({ children }: { children: ReactNode }) {
-  return (
-    <motion.div animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} initial={{ opacity: 0, y: 12 }} transition={{ duration: 0.24 }}>
-      {children}
-    </motion.div>
-  );
-}
-
 function formatErrorMessage(message: string) {
   if (message.includes("tokens per day") || message.includes("TPD")) {
     return "오늘 기본 분석 한도를 다 썼습니다. OpenRouter fallback 키가 설정되어 있으면 자동으로 대체 분석을 시도합니다.";
@@ -2121,11 +2223,6 @@ function normalizeProject(project: ProjectSummary & { project_slug?: string }): 
   };
 }
 
-function isTabularFile(filename: string) {
-  const normalized = filename.toLowerCase();
-  return normalized.endsWith(".csv") || normalized.endsWith(".xlsx");
-}
-
 function formatFileSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
@@ -2147,80 +2244,6 @@ function readableInsightType(type: string) {
     task_friction: "태스크 마찰",
   };
   return labels[type] ?? type;
-}
-
-function buildReportMarkdown(
-  projectName: string,
-  recognition: RecognitionResponse | null,
-  result: AnalysisResponse | null,
-  reportInsights: ReviewedInsight[],
-  segmentById: Map<string, Segment>
-) {
-  if (!result || !reportInsights.length) return "";
-
-  const typeSummary = Array.from(new Set(reportInsights.map((insight) => insight.type)))
-    .map((type) => `- ${type}: ${reportInsights.filter((insight) => insight.type === type).length}개`)
-    .join("\n");
-
-  const findingSections = reportInsights
-    .map((insight, index) => {
-      const evidence = getEvidenceSegmentIds(insight)
-        .slice(0, 3)
-        .map((segmentId) => segmentById.get(segmentId))
-        .filter(Boolean)
-        .map((segment) => `  - ${segment?.participant} · ${segment?.question_or_topic}: ${segment?.content}`)
-        .join("\n");
-
-      return `### ${index + 1}. ${insight.title}
-
-${insight.summary}
-
-**영향도 / 빈도 / 신뢰도**
-${insight.severity} / ${insight.frequency} / ${insight.confidence}
-
-**개선 제안**
-${insight.recommendation}
-
-**근거 발화**
-${evidence || "  - 연결된 근거 발화가 없습니다."}`;
-    })
-    .join("\n\n");
-
-  const appendixEvidence = reportInsights
-    .flatMap((insight) => getEvidenceSegmentIds(insight))
-    .filter((segmentId, index, segmentIds) => segmentIds.indexOf(segmentId) === index)
-    .map((segmentId) => segmentById.get(segmentId))
-    .filter(Boolean)
-    .map((segment) => `- ${segment?.participant} · ${segment?.question_or_topic}: ${segment?.content}`)
-    .join("\n");
-
-  return `# ${projectName} UX 리서치 보고서 초안
-
-## Executive Summary
-이번 분석에서는 ${reportInsights.length}개의 핵심 인사이트가 자동으로 반영되었습니다.
-
-## 조사 배경
-- 프로젝트명: ${projectName}
-- 자료명: ${result.source_name}
-- 자료 유형: ${recognition?.source_type || "미확인"}
-
-## 방법
-- 원자료 발화 단위: ${recognition?.segment_count ?? result.segment_count}개
-- 분석 대상 참가자 발화: ${recognition?.participant_utterance_count ?? "미확인"}개
-- 인식된 참가자: ${recognition?.participants.length ? recognition.participants.join(", ") : "미확인"}
-
-## 핵심 발견
-${findingSections}
-
-## 인사이트 유형
-${typeSummary || "- 추가 검토가 필요합니다."}
-
-## 개선 제안
-${reportInsights.map((insight, index) => `${index + 1}. ${insight.recommendation}`).join("\n")}
-
-## Appendix
-${appendixEvidence || "- 반영된 인사이트에 연결된 근거 발화가 없습니다."}
-`;
 }
 
 function getEvidenceSegmentIds(insight: Insight) {

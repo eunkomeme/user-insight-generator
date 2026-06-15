@@ -10,3 +10,10 @@ node_modules/
 .next/
 frontend/node_modules/
 frontend/.next/
+frontend/out/
+*.tsbuildinfo
+.playwright-mcp/
+/.agents/
+/*.png
+docs/GAUSS_API.md
+docs/GAUSS_INTEGRATION_GUIDE.html

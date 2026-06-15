@@ -86,10 +86,12 @@ def run_groq_chunked_qualitative_analysis(
     fallback_api_key: str = "",
     fallback_model: str = "",
     memory_context: str = "",
+    source_type: str = "텍스트",
+    quantitative_summary: dict[str, Any] | None = None,
 ) -> AnalysisResult:
     included = [segment for segment in segments if segment.include_in_analysis and segment.content.strip()]
     if not included:
-        raise ValueError("분석할 인터뷰 원문이 없습니다.")
+        raise ValueError("분석할 원자료가 없습니다.")
 
     try:
         return _run_chunked_with_provider(
@@ -101,6 +103,8 @@ def run_groq_chunked_qualitative_analysis(
             timeout_seconds=timeout_seconds,
             project_context=project_context,
             memory_context=memory_context,
+            source_type=source_type,
+            quantitative_summary=quantitative_summary,
             max_retries=0,
         )
     except ProviderRateLimitError:
@@ -115,6 +119,8 @@ def run_groq_chunked_qualitative_analysis(
             timeout_seconds=timeout_seconds,
             project_context=project_context,
             memory_context=memory_context,
+            source_type=source_type,
+            quantitative_summary=quantitative_summary,
             max_retries=1,
         )
 
@@ -128,6 +134,8 @@ def _run_chunked_with_provider(
     timeout_seconds: int,
     project_context: dict[str, Any] | None,
     memory_context: str = "",
+    source_type: str = "텍스트",
+    quantitative_summary: dict[str, Any] | None = None,
     max_retries: int = 0,
 ) -> AnalysisResult:
     chunks = _chunk_segments(included, chunk_size=get_analysis_chunk_size())
@@ -139,7 +147,7 @@ def _run_chunked_with_provider(
             endpoint=endpoint,
             provider_name=provider_name,
             system_prompt=_system_prompt(),
-            user_prompt=_chunk_prompt(chunk, index, len(chunks)),
+            user_prompt=_chunk_prompt(chunk, index, len(chunks), source_type),
             timeout_seconds=timeout_seconds,
             max_tokens=get_analysis_chunk_max_tokens(),
             max_retries=max_retries,
@@ -156,7 +164,7 @@ def _run_chunked_with_provider(
         endpoint=endpoint,
         provider_name=provider_name,
         system_prompt=_system_prompt(),
-        user_prompt=_synthesis_prompt(chunk_results, included, project_context, memory_context),
+        user_prompt=_synthesis_prompt(chunk_results, included, project_context, memory_context, source_type, quantitative_summary),
         timeout_seconds=timeout_seconds,
         max_tokens=get_analysis_synthesis_max_tokens(),
         max_retries=max_retries,
@@ -239,25 +247,113 @@ def _provider_model_payload(model: str, provider_name: ProviderName) -> dict[str
 
 def _system_prompt() -> str:
     return """
-당신은 사용자 리서치, 사용성 테스트, 고객 피드백 데이터를 분석하는 시니어 UX 리서처이자 제품 전략 분석가입니다.
-인터뷰 원문, FGI 속기록, UT 관찰 기록, 설문 주관식 응답, VOC, 고객상담 로그 등 비정형 사용자 데이터를 분석해 제품·서비스 의사결정에 활용 가능한 인사이트를 도출하세요.
+You are an expert at synthesizing user research — turning raw qualitative and quantitative data into structured insights that drive product decisions. You help product managers make sense of interviews, surveys, usability tests, support data, and behavioral analytics.
 
-중요 원칙:
-- 인사이트는 사용자가 말한 내용을 다시 표현한 문장이 아닙니다.
-- 인사이트는 여러 발화, 행동, 관찰 사이에 숨어 있는 반복 패턴, 긴장, 모순, 원인, 맥락, 기대, 불안, 사용 조건, 실패 구조를 해석한 문장입니다.
-- "사용자는 A를 원한다", "A 기능 개선이 필요하다", "사용성이 중요하다", "UI가 복잡하다" 같은 문장은 최종 인사이트로 쓰지 마세요. 이는 관찰/요약일 뿐입니다.
-- 좋은 인사이트는 표면 발화, 구체적 사용 맥락, 숨은 기대/불안/판단 기준, 말과 행동의 긴장, 제품 구조와 실제 과업 사이의 간극, 설계 함의를 포함해야 합니다.
-- 분석 근거로 진행자 질문, 섹션 제목, 문서 제목, 시스템 메시지, 파일명, 일반론을 사용하지 마세요.
-- 관찰은 단순 키워드가 아니라 맥락이 포함된 문장으로 쓰세요.
-- 코드는 "편의성", "알림", "신뢰" 같은 단어가 아니라 문제 구조를 드러내야 합니다.
-- 인사이트로 승격하려면 반복성, 맥락/행동/감정 연결, 구조적 원인 설명, 설계 영향, 근거 추적 가능성을 확인하세요.
-- 확실하지 않은 해석은 confidence를 보통 또는 낮음으로 표시하세요.
-- 권장 조치는 "개선해야 한다"로 끝내지 말고 개선 대상, 사용 맥락, 구체적 UI/기능/안내/자동화, 우선순위, 예상 효과, 검증 방법 중 최소 3개 이상을 포함하세요.
-- supporting_quotes.source_id에는 반드시 제공된 segment id만 넣으세요.
-- status는 초안 상태인 "draft"로 반환하세요.
-- 근거 없는 결론은 만들지 마세요.
-- 출력은 JSON만 반환하세요. 마크다운, 설명문, 코드블록은 금지입니다.
+## Research Synthesis Methodology
+
+### Thematic Analysis
+1. Familiarization: Read through all the data before coding anything.
+2. Initial coding: Tag each observation, quote, or data point with descriptive codes. Be generous with codes.
+3. Theme development: Group related codes into candidate themes that capture something important about the data.
+4. Theme review: Check themes against the data. Are themes distinct? Do they tell a coherent story?
+5. Theme refinement: Define and name each theme clearly with a 1-2 sentence description.
+6. Report: Write up themes as findings with supporting evidence.
+
+### Affinity Mapping
+1. Capture each distinct observation or quote as a separate note.
+2. Cluster related notes based on similarity — let categories emerge from the data.
+3. Label clusters with a descriptive name capturing the common thread.
+4. Identify themes from clusters and their relationships.
+
+Tips: One observation per note. Move notes freely. Split overly large clusters. Outliers are interesting — do not force them into a cluster.
+
+### Triangulation
+Strengthen findings by combining multiple data sources:
+- Methodological: same question, different methods (interviews + survey + analytics)
+- Source: same method, different participants or segments
+- Temporal: same observation at different points in time
+
+A finding supported by multiple sources is much stronger. When sources disagree, investigate — it may reveal different user segments.
+
+## Interview Note Analysis
+
+### Extracting Insights
+For each interview identify:
+- **Observations**: What did the participant describe doing, experiencing, or feeling? Note context (when, where, how often). Flag workarounds — these are unmet needs in disguise.
+- **Direct quotes**: Verbatim statements that illustrate a point. Attribute to participant type, not name. A quote is evidence, not a finding.
+- **Behaviors vs stated preferences**: What people DO often differs from what they SAY they want. Behavioral observations are stronger evidence.
+- **Signals of intensity**: Emotional language, frequency of encounter, effort of workaround, consequence when things go wrong.
+
+### Cross-Interview Analysis
+- Look for patterns across multiple participants.
+- Note frequency: how many participants mentioned each theme?
+- Identify segments: do different user types have different patterns?
+- Surface contradictions: where do participants disagree?
+- Find surprises: what challenged prior assumptions?
+
+## Survey Data Interpretation
+
+### Quantitative Analysis
+- Look at distribution shape, not just averages. A bimodal distribution tells a different story than a normal one.
+- Break down responses by user segment — aggregates can mask important differences.
+- For small samples, be cautious about drawing conclusions from small differences.
+
+### Open-Ended Response Analysis
+- Treat responses like mini interview notes.
+- Count frequency of themes across responses.
+- Look for themes that appear in open-ended responses but not in structured questions — these are things you did not think to ask about.
+
+### Common Mistakes
+- Reporting averages without distributions.
+- Over-interpreting small differences.
+- Confusing correlation with causation.
+
+## Combining Qualitative and Quantitative
+
+- **Qualitative first**: Reveals WHAT is happening and WHY. Generates hypotheses.
+- **Quantitative validation**: Reveals HOW MUCH and HOW MANY. Tests hypotheses at scale.
+- Use quantitative data to prioritize qualitative findings.
+- Present combined evidence: "47% of surveyed users report difficulty with X (survey), and interviews reveal this is because Y (qualitative finding)."
+- When sources disagree, report honestly and investigate rather than choosing one source.
+
+## Output Rules
+
+- Insights are NOT restatements of what users said. Insights are interpretations of repeating patterns, tensions, contradictions, causes, and structural failures hidden across multiple observations.
+- Do NOT produce insights like "users want A", "feature A needs improvement", or "UI is complex" — these are observations, not insights.
+- Good insights include: surface utterance + specific usage context + hidden expectation/anxiety + tension between words and behavior + gap between product structure and actual task + design implication.
+- Do NOT use facilitator questions, section headings, document titles, system messages, filenames, or general statements as evidence.
+- Observations must be written as context-rich sentences, not keywords.
+- Codes must reveal problem structure, not label categories like "convenience" or "trust".
+- Before elevating to an insight, confirm: repeatability, context/behavior/emotion connection, structural cause explanation, design impact, evidence traceability.
+- Uncertain interpretations must set confidence to "보통" or "낮음".
+- Recommendations must include at minimum 3 of: target of improvement, usage context, specific UI/feature/guidance/automation, priority, expected effect, validation method. Never end with "needs improvement".
+- supporting_quotes.source_id must only use segment ids provided in the input.
+- status must be "draft".
+- Never fabricate conclusions without evidence.
+- Return JSON only. No markdown, no explanation, no code fences.
+
+Always respond in Korean (한국어로 답변하세요).
 """.strip()
+
+
+def _build_quantitative_block(quantitative_summary: dict[str, Any] | None) -> str:
+    if not quantitative_summary:
+        return ""
+    total = quantitative_summary.get("total_rows", 0)
+    columns = quantitative_summary.get("columns", {})
+    if not columns:
+        return ""
+    lines = [f"=== 정량 데이터 요약 ({total}개 행) ==="]
+    for col_name, stats in columns.items():
+        col_type = stats.get("type", "numeric")
+        if col_type == "binary":
+            lines.append(f"[{col_name}] 성공/실패: 성공률 {stats.get('success_rate', '?')} (n={stats.get('count', '?')})")
+        elif col_type == "scale":
+            lines.append(f"[{col_name}] 척도 점수: 평균 {stats.get('mean', '?')} / 최저 {stats.get('min', '?')} / 최고 {stats.get('max', '?')} (n={stats.get('count', '?')})")
+        else:
+            lines.append(f"[{col_name}]: 평균 {stats.get('mean', '?')} / 최저 {stats.get('min', '?')} / 최고 {stats.get('max', '?')} (n={stats.get('count', '?')})")
+    lines.append("위 수치를 인사이트 도출 시 반영하세요. 낮은 성공률·낮은 만족도 항목에서 원인 분석을 강화하세요.\n")
+    return "\n".join(lines) + "\n"
 
 
 def _build_context_block(project_context: dict[str, Any] | None) -> str:
@@ -372,10 +468,19 @@ def _compact_segment(segment: Segment, max_chars: int | None = None) -> dict[str
     }
 
 
-def _chunk_prompt(chunk: list[Segment], chunk_index: int, total_chunks: int) -> str:
+def _source_label(source_type: str) -> str:
+    if source_type in {"CSV", "엑셀"}:
+        return "설문/정량 데이터"
+    if source_type == "마크다운":
+        return "리서치 메모"
+    return "인터뷰 원문"
+
+
+def _chunk_prompt(chunk: list[Segment], chunk_index: int, total_chunks: int, source_type: str = "텍스트") -> str:
     compact_segments = [_compact_segment(segment) for segment in chunk]
+    label = _source_label(source_type)
     return f"""
-긴 인터뷰를 여러 묶음으로 나눠 분석 중입니다.
+{label}를 여러 묶음으로 나눠 분석 중입니다.
 현재 묶음: {chunk_index}/{total_chunks}
 
 이 묶음에서만 관찰되는 UX 신호를 추출하세요.
@@ -405,7 +510,7 @@ def _chunk_prompt(chunk: list[Segment], chunk_index: int, total_chunks: int) -> 
 """.strip()
 
 
-def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segment], project_context: dict[str, Any] | None = None, memory_context: str = "") -> str:
+def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segment], project_context: dict[str, Any] | None = None, memory_context: str = "", source_type: str = "텍스트", quantitative_summary: dict[str, Any] | None = None) -> str:
     referenced_ids = _collect_referenced_segment_ids(chunk_results)
     if not referenced_ids:
         referenced_ids = [segment.id for segment in segments[:30]]
@@ -422,8 +527,10 @@ def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segmen
     compact_chunk_results = _compact_chunk_results(chunk_results)
     context_block = _build_context_block(project_context)
     memory_block = (memory_context.strip() + "\n\n") if memory_context.strip() else ""
+    quantitative_block = _build_quantitative_block(quantitative_summary)
+    label = _source_label(source_type)
     return f"""
-{memory_block}{context_block}아래는 긴 인터뷰를 여러 묶음으로 나눠 1차 분석한 결과입니다.
+{memory_block}{context_block}{quantitative_block}아래는 {label}를 여러 묶음으로 나눠 1차 분석한 결과입니다.
 이 결과를 통합해 리서처가 바로 읽을 수 있는 최종 UX 리서치 분석 JSON을 만드세요.
 
 반환 JSON 스키마:
@@ -450,6 +557,13 @@ def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segmen
       "status": "draft"
     }}
   ],
+  "relationships": [
+    {{
+      "from_id": "insight_001",
+      "to_id": "insight_002",
+      "label": "공통 원인|심화 관계|상충|선행 조건 중 하나"
+    }}
+  ],
   "participant_mentions": {{"P1": 3}}
 }}
 
@@ -463,6 +577,7 @@ def _synthesis_prompt(chunk_results: list[dict[str, Any]], segments: list[Segmen
 - recommendation은 개선 대상, 사용 맥락, 구체적 조치, 예상 효과 또는 검증 방법을 포함하세요.
 - supporting_quotes.source_id에는 evidence_lookup에 있는 id만 넣으세요.
 - status는 항상 draft로 반환하세요.
+- relationships는 인사이트 간 의미 있는 연결만 포함하세요. 없으면 빈 배열로 반환하세요.
 
 1차 분석 결과:
 {json.dumps(compact_chunk_results, ensure_ascii=False)}
@@ -577,7 +692,7 @@ def _normalize_result(data: dict[str, Any], segments: list[Segment]) -> dict[str
     segment_by_id = {segment.id: segment for segment in segments}
     allowed_types = {"pain_point", "usability_issue", "positive_signal", "task_friction"}
     allowed_levels = {"높음", "보통", "낮음"}
-    allowed_statuses = {"draft", "approved", "rejected", "merged"}
+    allowed_statuses = {"draft"}
 
     insights = []
     for index, raw_insight in enumerate(data.get("insights", []), start=1):
@@ -647,7 +762,18 @@ def _normalize_result(data: dict[str, Any], segments: list[Segment]) -> dict[str
             }
         )
 
+    relationships = [
+        {
+            "from_id": str(r.get("from_id", "")),
+            "to_id": str(r.get("to_id", "")),
+            "label": str(r.get("label", "")),
+        }
+        for r in data.get("relationships", [])
+        if r.get("from_id") and r.get("to_id")
+    ]
+
     return {
         "insights": insights,
         "participant_mentions": data.get("participant_mentions", {}),
+        "relationships": relationships,
     }
