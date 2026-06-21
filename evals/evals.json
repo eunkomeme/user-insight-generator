@@ -1,0 +1,63 @@
+{
+  "skill_name": "usability-research-synthesizer",
+  "evals": [
+    {
+      "id": 0,
+      "name": "usability-test-rich-behavioral",
+      "prompt": "I ran a moderated usability test on our checkout redesign — notes are in usability_test_notes.md. Can you analyze it and build me a visual report I can share with the product team?",
+      "files": ["sample-inputs/usability_test_notes.md"],
+      "expected_output": "An evidence-grounded synthesis emphasizing task friction (T2 discount code placement, T4 change-address dead end, P4 disabled-looking pay button), with severity vs. confidence kept distinct, real quotes attributed to anonymized participants, and a self-contained HTML report (inline CSS, no external deps) whose modules fit behavioral/task data (e.g., task friction map, findings, severity matrix). No invented metrics or participant attributes beyond the source.",
+      "assertions": [
+        {"text": "Produces a single self-contained .html file with inline CSS and no external CDN/image/JS dependencies", "type": "qualitative"},
+        {"text": "Surfaces the discount-code placement issue (T2) and the change-address dead-end (T4) as findings", "type": "qualitative"},
+        {"text": "Keeps observation, interpretation, and recommendation visibly distinct", "type": "qualitative"},
+        {"text": "Quotes are verbatim from the source and attributed to anonymized labels (P1-P5); no fabricated quotes", "type": "qualitative"},
+        {"text": "Does not invent metrics, benchmarks, or business-impact numbers not present in the notes", "type": "qualitative"},
+        {"text": "Briefly explains why the chosen report structure fits this material", "type": "qualitative"}
+      ]
+    },
+    {
+      "id": 1,
+      "name": "interview-thematic-qualitative",
+      "prompt": "Here are excerpts from four user interviews for our budgeting app (interview_transcripts.md). Synthesize the themes for a stakeholder readout.",
+      "files": ["sample-inputs/interview_transcripts.md"],
+      "expected_output": "A thematic/affinity-style synthesis with bottom-up themes (e.g., automation/effort aversion, distrust from mis-categorization, financial anxiety, multi-user/category-fit needs), real quotes as evidence, recognition of segment differences (hands-on vs. hands-off users), interpretation labeled as such, and a fitting HTML report. No invented participant counts or quotes.",
+      "assertions": [
+        {"text": "Derives themes bottom-up from the transcript content rather than imposing a fixed template", "type": "qualitative"},
+        {"text": "Each theme is supported by real, verbatim quotes from the transcripts", "type": "qualitative"},
+        {"text": "Distinguishes interpretation from observation in the findings", "type": "qualitative"},
+        {"text": "Notes contrasting user types / segment differences (e.g., hands-on reviewer vs. automation-seeker) rather than over-generalizing", "type": "qualitative"},
+        {"text": "Produces a self-contained HTML report with modules suited to qualitative data (e.g., affinity board, quote wall, themes)", "type": "qualitative"},
+        {"text": "Does not invent a participant count beyond the four interviews or fabricate quotes", "type": "qualitative"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "thin-input-anti-fabrication",
+      "prompt": "Can you analyze this survey question for me? I need the completion rate and how many users struggled with the new navigation. Data is in thin_survey_fragment.txt.",
+      "files": ["sample-inputs/thin_survey_fragment.txt"],
+      "expected_output": "A limited-evidence response that refuses to invent a completion rate (none exists in the data) or a precise count of struggling users (only two responses, count of total respondents unknown). It should clearly state what can and cannot be concluded, flag research gaps prominently, note the conflicting signals (one confused, one positive), and avoid generalizing. May still produce a short honest HTML summary, but must not fabricate metrics or counts.",
+      "assertions": [
+        {"text": "Explicitly declines to provide a completion rate, stating none exists in the source", "type": "qualitative"},
+        {"text": "Does not invent how many users struggled or the total respondent count", "type": "qualitative"},
+        {"text": "Flags the input as thin/limited and calls out research gaps", "type": "qualitative"},
+        {"text": "Notes the conflicting signals (one negative on nav, one positive on redesign) without picking a tidy winner", "type": "qualitative"},
+        {"text": "Avoids generalizing two responses into a confident pattern", "type": "qualitative"}
+      ]
+    }
+  ],
+  "non_trigger_prompts": [
+    {
+      "prompt": "I'm planning a usability test of our new onboarding flow for next month. Can you write me 10 task scenarios and a set of screener questions to recruit participants?",
+      "reason": "Research planning / question generation with no data to synthesize yet — out of scope."
+    },
+    {
+      "prompt": "Here's our GA4 export for last quarter. Which landing-page variant had a statistically significant conversion lift, and what's the p-value?",
+      "reason": "Product analytics / A/B significance testing — quantitative stats work, not usability research synthesis."
+    },
+    {
+      "prompt": "This CSV of survey responses has messy headers and duplicate rows — can you clean it up and give me back a tidy spreadsheet?",
+      "reason": "Tabular data cleaning where the deliverable is a spreadsheet; belongs to the xlsx skill, not research synthesis."
+    }
+  ]
+}

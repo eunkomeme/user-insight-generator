@@ -1,63 +1,31 @@
-# UX Research AI Workbench
+# user-insight-generator
 
-사내망에서 실행 가능한 UX 리서치 자료 분석 워크벤치입니다. Next.js 프론트엔드와 FastAPI 백엔드로 구성되어 있으며, 인터뷰 속기, 관찰 메모, CSV/XLSX 사용성 평가 데이터를 소스 라이브러리에 저장하고 AI 인사이트, 근거 발화, 채팅 답변, Markdown 보고서 초안을 생성합니다.
+사용성 평가·UX 리서치 원자료를 **근거에 기반한 발견 → 실무용 작업 문서**로 정리해 주는 Claude Skill.
 
-## 현재 구현 범위
+분석가 보고서가 아니라, 제품팀이 회의·JIRA/PLM·개발 협의에 바로 쓸 수 있는 **작업 문서(HTML)** 와
+**전체 수치 집계(.xlsx)** 를 한국어로 만들어 줍니다.
 
-- 3패널 CXI Studio UI: 출처 패널, 근거 기반 채팅, 산출물 스튜디오
-- 프로젝트/소스 라이브러리 파일시스템 저장 (`projects/`)
-- TXT/MD 파싱과 CSV/XLSX 행별 Markdown 관찰 노트 변환
-- Groq 기본 분석, OpenRouter rate-limit fallback
-- 새 인사이트 스키마: `type`, `severity`, `frequency`, `supporting_quotes`, `status`
-- 선택한 소스에만 근거하는 Q&A
-- 인사이트/어피니티/인사이트 맵/보고서 모달
-- 백엔드 Markdown 보고서 생성 API
-- Gauss 연동 후보 모듈 보존: 운영 전환 후보, 기본 라우팅은 아직 Groq/OpenRouter
+## 핵심 원칙
+- 없는 사실은 만들지 않는다. 참가자 수·인용·지표·과제명·기능·매출 영향을 지어내지 않음.
+- 관찰 / 해석 / 제안을 구분하되, 본문은 실행 중심으로, 방법론·근거는 부록으로.
+- 자료의 종류·품질·풍부함에 따라 분석 방법과 보고서 구조를 적응적으로 선택.
+- 정량 수치는 전부 `.xlsx`로 집계, 의사결정 핵심만 HTML로.
 
-## 실행 방법
+## 구성
+- `SKILL.md` — 스킬 본문(워크플로, 근거 규칙, 적응형 분석 선택, 보고서 구조).
+- `references/` — 방법론 노트(근거 보존, 리서치 원칙, 분석 패턴, HTML 보고서 패턴, Maze 노트).
+- `evals/` — 트리거·논트리거·엣지 테스트 프롬프트와 샘플 입력.
+- `examples/` — 실제 산출물 예시(체크아웃 사용성 테스트, 가계부 인터뷰).
 
-백엔드:
+## 보고서 기본 구조
+1. 이번 테스트에서 확인된 결론
+2. 우선 개선 이슈
+3. 개선안 백로그(표)
+4. 이슈별 상세 카드(문제/근거/영향/제안/확인 방법/근거 수준)
+5. 과제별 결과 요약
+6. 근거 부록(접이식)
+7. 추가 확인 필요사항
 
-```bash
-pip install -r requirements.txt
-python3 -m uvicorn backend.main:app --reload --port 8000
-```
-
-프론트엔드:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-브라우저에서 `http://localhost:3000`을 엽니다.
-
-## 환경변수
-
-루트의 `.env` 파일에 다음 값을 설정합니다.
-
-```bash
-GROQ_API_KEY=...
-GROQ_MODEL=llama-3.3-70b-versatile
-OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=openrouter/free
-OPENROUTER_MODELS=
-ANALYSIS_CHUNK_SIZE=10
-ANALYSIS_CHUNK_MAX_TOKENS=1500
-ANALYSIS_SYNTHESIS_MAX_TOKENS=6000
-ANALYSIS_PROMPT_MAX_SEGMENTS=45
-ANALYSIS_PROMPT_SEGMENT_CHARS=420
-ANALYSIS_CHUNK_SEGMENT_CHARS=260
-```
-
-Gauss 안내문서는 내부 검증용 로컬 문서로 유지하며 GitHub 업로드 대상에서는 제외합니다. 코드 레벨 후보 모듈은 `core/analysis/gauss.py`에 보존되어 있습니다.
-
-## 검증
-
-```bash
-python3 -m unittest discover -s tests -v
-cd frontend && npm run build
-```
-
-실제 회사 리서치 데이터는 승인된 저장 위치와 승인된 LLM API에서만 사용하세요. 외부 개발 환경에서는 비식별화한 더미 데이터를 사용합니다.
+## 출처 / 방법론 참고
+Maze의 이해관계자 buy-in, 어피니티 다이어그램, 사용성 지표, 정성 리서치 글에서 원칙만 차용
+(구조 복제 아님). 자세한 출처는 `references/maze-methodology-notes.md` 참고.
