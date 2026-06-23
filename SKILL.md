@@ -101,7 +101,16 @@ This is a sequence of intentions, not a rigid checklist. Adapt depth to the mate
 deserves a light pass, rich input rewards deeper synthesis.
 
 1. **Inspect before analyzing.** Read everything first. Resist the pull to start theming
-   immediately. Get a feel for what you actually have.
+   immediately. Get a feel for what you actually have. When the input is a **multi-tab spreadsheet**
+   (a common real case — research teams keep everything in one workbook), open *every* sheet before
+   deciding what matters. Real workbooks mix two kinds of tabs: **observation/score tabs** that hold
+   the actual data (per-participant task results, SUS/SEQ scores, issue logs, open-ended answers,
+   participant background) and **logistics/template tabs** that are study admin, not findings
+   (recruiting/invitation email copy, marketing blurbs, the moderator script, scheduling). Analyze
+   the former; exclude the latter and say so once in the methodology note — pulling email-template or
+   script text into findings is a grounding error, not thoroughness. Expect mess: header rows at
+   different positions per tab, merged-looking title rows, and blank cells (a blank is "수집 안 됨",
+   never a value to invent). Map each tab's structure before you tally anything.
 
 2. **Characterize the material.** What kind of data is this (transcripts? task logs? metrics?
    open-ended survey? mixed? an existing report)? How much of it is there — how many participants,
@@ -195,23 +204,32 @@ explanation of observation/interpretation/recommendation, and do **not** sprinkl
 repeatedly through the body — the grounding shows up *inside* each issue (its 근거 and 근거 수준),
 not as a framing lecture. Traceability stays intact; it just stops being the headline.
 
-**Default structure** (adapt to the material — this is the working-document spine, not a rigid mold):
+Readability is part of being useful: a grounded report nobody can comfortably read fails the same way
+a fabricated one does. Four habits matter most — (1) one piece of evidence per line, never a run-on
+`근거: P1 … · P2 … · P3 …` wall; (2) clean label↔value rows (a 2-column grid, so a value's second line
+stays aligned, not an inline-block label with text trailing off); (3) color and emphasis carry one
+meaning at a time, and quotes/Korean are upright, not italic; (4) Decision Summary bullets are single
+takeaway sentences, not paragraphs. `references/html-report-patterns.md` shows each with code.
 
-1. **이번 테스트에서 확인된 결론 (Decision Summary)** — 3–5 bullets. What changed, what failed, what
-   needs a product decision. No methodology here.
-2. **우선 개선 이슈 (Priority Issues)** — issues ranked by user impact × frequency × task criticality ×
-   evidence strength. Each title is plain and action-oriented ("결제 화면에서 배송지 변경 버튼을 찾기
-   어려움"), never a vague label ("진입점 부재", "시각 어포던스").
-3. **개선안 백로그 (Action Backlog)** — a table the team can lift straight into a tracker. Columns:
-   우선순위 / 이슈 / 근거 / 제안 개선안 / 기대 효과 / 확인 방법. Never invent owners, dates, or
-   business-impact numbers that aren't in the data.
-4. **이슈별 상세 카드 (Issue Detail Cards)** — one card per priority issue: 문제 / 근거 (참가자·과제·인용
-   또는 행동) / 영향 / 제안 / 확인 방법 / 근거 수준 (강·중·약).
-5. **과제별 결과 요약 (Task Result Overview)** — a simple task table (성공 / 실패 / 머뭇거림 / 우회 경로).
+**Default structure** (adapt to the material — this is the working-document spine, not a rigid mold).
+Say each issue **once**: the backlog table is the one-glance ranked summary, and the detail cards are
+the same issues at higher zoom — don't also add a third standalone ranked list.
+
+1. **이번 테스트에서 확인된 결론 (Decision Summary)** — 3–5 bullets, each one scannable takeaway
+   sentence. What changed, what failed, what needs a product decision. No methodology here.
+2. **개선안 백로그 (Action Backlog)** — the ranked one-glance table the team lifts straight into a
+   tracker; this doubles as the priority list, so don't add a separate ranked-issue section. Columns:
+   우선순위 / 이슈 / 근거(요약) / 제안 개선안 / 기대 효과 / 확인 방법, one short line per cell. Never
+   invent owners, dates, or business-impact numbers that aren't in the data.
+3. **이슈별 상세 카드 (Issue Detail Cards)** — one card per issue, in priority order, **rank shown in
+   the card header**: 문제 / 근거 (참가자·과제·인용 또는 행동, as a one-per-line list) / 영향 / 제안 /
+   확인 방법 / 근거 수준 (강·중·약, stated once). Titles plain and action-oriented ("결제 화면에서
+   배송지 변경 버튼을 찾기 어려움"), never a vague label ("진입점 부재", "시각 어포던스").
+4. **과제별 결과 요약 (Task Result Overview)** — a simple task table (성공 / 실패 / 머뭇거림 / 우회 경로).
    Don't dump every raw note here.
-6. **근거 부록 (Evidence Appendix)** — participant-level evidence table, verbatim quotes, raw
+5. **근거 부록 (Evidence Appendix)** — participant-level evidence table, verbatim quotes, raw
    observations, metrics if any. Full traceability lives here; collapsible is ideal.
-7. **추가 확인 필요사항 (Research Gaps)** — missing metrics, weak-evidence items, follow-up questions.
+6. **추가 확인 필요사항 (Research Gaps)** — missing metrics, weak-evidence items, follow-up questions.
 
 For qualitative-only material the same spine applies, with themes/user needs standing in for "issues"
 and a quote-driven appendix. For thin input, a short Decision Summary + Gaps is enough — don't pad.

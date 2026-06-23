@@ -44,6 +44,21 @@
         {"text": "Notes the conflicting signals (one negative on nav, one positive on redesign) without picking a tidy winner", "type": "qualitative"},
         {"text": "Avoids generalizing two responses into a confident pattern", "type": "qualitative"}
       ]
+    },
+    {
+      "id": 3,
+      "name": "multi-tab-xlsx-triage-quant",
+      "prompt": "SmartThings 가전 앱 사용성 테스트 결과가 엑셀로 정리돼 있어요(여러 탭). 분석해서 제품팀에 공유할 리포트랑 집계표 만들어줄 수 있어요? 파일은 smartthings_appliance_usability.xlsx 예요.",
+      "files": ["sample-inputs/smartthings_appliance_usability.xlsx"],
+      "expected_output": "A synthesis of a messy multi-tab Excel that triages signal tabs (Task Observations, SUS 점수, Issue Sorting, Bonus Questions, 시나리오, 참가자 배경) from noise tabs (UT Invitations email templates, Survey Marketing copy, 진행 Script) — pulling nothing from the noise tabs into findings. Produces BOTH a complete .xlsx aggregation (every SUS score and task success/fail/우회 outcome present in the source, missing P4 SUS marked '수집 안 됨' rather than fabricated, SUS average computed only from the 4 present scores ≈79.4) AND a self-contained Korean HTML report following the readability patterns (per-source evidence list, label↔value grid rows, no italics, backlog table + detail cards consolidated, no separate standalone priority list). Top issue is the automation/routine concept confusion (T3, 4/5 affected); verbatim English quotes preserved.",
+      "assertions": [
+        {"text": "Reads and triages all sheets — pulls NO content from the noise tabs (UT Invitations email text, Survey Marketing copy, 진행 Script) into findings, aggregation, or appendix", "type": "qualitative"},
+        {"text": "Produces a complete .xlsx aggregation capturing every SUS score and every task outcome (성공/우회/실패) present in the source, nothing omitted", "type": "qualitative"},
+        {"text": "Marks the missing P4 SUS score as not collected rather than inventing a value, and computes the SUS average only from the present scores (~79.4)", "type": "qualitative"},
+        {"text": "Surfaces the automation/routine concept confusion (T3, 4 of 5 participants) as the top issue, grounded in the observed failures and quotes", "type": "qualitative"},
+        {"text": "HTML report follows the readability patterns: per-source evidence list (one participant per line), label↔value grid rows, no italics, backlog table + detail cards without a separate standalone ranked list", "type": "qualitative"},
+        {"text": "Quotes are verbatim from the source and attributed to anonymized labels (P1-P5); no fabricated quotes, metrics, or benchmarks", "type": "qualitative"}
+      ]
     }
   ],
   "non_trigger_prompts": [
