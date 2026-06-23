@@ -3,151 +3,256 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>체크아웃 사용성 테스트 — 작업 문서</title>
+<title>체크아웃 리디자인 사용성 테스트 — 작업 문서</title>
 <style>
-  :root{--p1:#dc2626;--p2:#ea580c;--p3:#ca8a04;--ink:#1f2937;--mut:#6b7280;--line:#e5e7eb;--bg:#f8fafc;}
+  :root{ --p1:#dc2626; --p2:#ea580c; --p3:#ca8a04; --p4:#64748b;
+         --ink:#1f2937; --mut:#6b7280; --line:#e5e7eb; --bg:#f8fafc; }
   *{box-sizing:border-box;}
-  body{font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
-       line-height:1.6;color:var(--ink);max-width:1000px;margin:0 auto;padding:2rem 1.5rem;}
-  h1{font-size:1.7rem;margin:0 0 .2rem;}
-  .sub{color:var(--mut);margin:0 0 1.6rem;font-size:.95rem;}
-  h2{font-size:1.25rem;margin:2.2rem 0 .8rem;padding-bottom:.3rem;border-bottom:2px solid var(--line);}
-  .summary{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.4rem;}
-  .summary ul{margin:.4rem 0 0;padding-left:1.2rem;}
-  .summary li{margin:.35rem 0;}
-  .decide{display:inline-block;background:#1e293b;color:#fff;font-size:.72rem;font-weight:700;
-          padding:.1rem .5rem;border-radius:6px;margin-right:.4rem;vertical-align:middle;}
-  .issuelist{list-style:none;padding:0;margin:0;}
-  .issuelist li{display:flex;gap:.7rem;align-items:flex-start;padding:.6rem .2rem;border-bottom:1px dashed var(--line);}
-  .rank{flex:0 0 auto;width:1.8rem;height:1.8rem;border-radius:50%;color:#fff;font-weight:700;
-        display:flex;align-items:center;justify-content:center;font-size:.95rem;}
-  .r1{background:var(--p1);}.r2{background:var(--p2);}.r3{background:var(--p3);}.r4{background:#64748b;}
-  table{border-collapse:collapse;width:100%;font-size:.92rem;}
-  th,td{border:1px solid var(--line);padding:.55rem .65rem;text-align:left;vertical-align:top;}
-  th{background:var(--bg);}
-  .card{border:1px solid var(--line);border-left:6px solid var(--p1);border-radius:10px;padding:1rem 1.2rem;margin:1rem 0;}
-  .card.lv2{border-left-color:var(--p2);}.card.lv3{border-left-color:var(--p3);}.card.lv4{border-left-color:#64748b;}
-  .card h3{margin:.1rem 0 .7rem;font-size:1.1rem;}
-  .card .row{margin:.35rem 0;}
-  .card .k{display:inline-block;min-width:5.2rem;font-weight:700;color:#374151;}
-  .lvl{font-size:.74rem;font-weight:700;padding:.12rem .5rem;border-radius:999px;color:#fff;}
-  .lvl.s{background:#15803d;}.lvl.m{background:#b45309;}.lvl.w{background:#9ca3af;}
-  q,.quote{color:#334155;font-style:italic;}
-  .ok{color:#15803d;font-weight:600;}.bad{color:#b91c1c;font-weight:600;}.warn{color:#b45309;font-weight:600;}
-  details{margin:1rem 0;border:1px solid var(--line);border-radius:10px;padding:.4rem .9rem;background:#fcfcfd;}
-  summary{cursor:pointer;font-weight:700;padding:.4rem 0;}
-  .note{color:var(--mut);font-size:.86rem;}
-  .pill{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:6px;padding:.05rem .45rem;font-size:.8rem;margin-right:.3rem;}
+  body{ font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+        line-height:1.65; color:var(--ink); max-width:980px; margin:0 auto; padding:2rem 1.5rem 4rem; }
+  h1{ font-size:1.6rem; margin:0 0 .3rem; }
+  .sub{ color:var(--mut); margin:0 0 1.8rem; font-size:.95rem; }
+  h2{ font-size:1.25rem; margin:2.6rem 0 .9rem; padding-bottom:.35rem; border-bottom:2px solid var(--line); }
+
+  .summary{ background:var(--bg); border:1px solid var(--line); border-radius:14px; padding:1.2rem 1.5rem; }
+  .summary ul{ margin:.4rem 0 0; padding-left:1.2rem; }
+  .summary li{ margin:.6rem 0; }
+  .summary .detail{ color:var(--mut); }
+
+  table{ border-collapse:collapse; width:100%; font-size:.92rem; }
+  th,td{ border:1px solid var(--line); padding:.55rem .65rem; text-align:left; vertical-align:top; }
+  th{ background:var(--bg); }
+
+  .card{ border:1px solid var(--line); border-left:6px solid var(--p1); border-radius:12px;
+         padding:1.1rem 1.3rem; margin:1.2rem 0; }
+  .card.l2{border-left-color:var(--p2);} .card.l3{border-left-color:var(--p3);} .card.l4{border-left-color:var(--p4);}
+  .card h3{ display:flex; align-items:center; gap:.5rem; margin:.1rem 0 .8rem; font-size:1.08rem; }
+  .rank{ flex:0 0 auto; width:1.7rem; height:1.7rem; border-radius:8px; background:#eef2f7; color:#334155;
+         font-weight:800; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
+  .lvl{ margin-left:auto; font-size:.74rem; font-weight:700; padding:.1rem .55rem; border-radius:999px;
+        border:1px solid var(--line); color:var(--mut); white-space:nowrap; }
+
+  .row{ display:grid; grid-template-columns:5.5rem 1fr; gap:.15rem .9rem; margin:.55rem 0; }
+  .row .k{ font-weight:700; color:#374151; }
+
+  ul.evidence{ list-style:none; margin:.1rem 0 0; padding:0; }
+  ul.evidence li{ margin:.45rem 0; padding-left:.1rem; }
+  .pid{ display:inline-block; min-width:2.1rem; font-weight:700; color:#334155; }
+  .q{ color:#475569; }
+
+  .ok{color:#15803d;font-weight:600;} .bad{color:#b91c1c;font-weight:600;} .warn{color:#b45309;font-weight:600;}
+  details.appendix{ margin-top:1.6rem; border:1px solid var(--line); border-radius:12px; background:var(--bg); }
+  details.appendix>summary{ cursor:pointer; padding:.9rem 1.2rem; font-weight:700; }
+  details.appendix .inner{ padding:0 1.2rem 1.2rem; }
+  .note{ color:var(--mut); font-size:.86rem; }
+  .legend{ font-size:.82rem; color:var(--mut); margin:.6rem 0 0; }
 </style>
 </head>
 <body>
 
-<h1>체크아웃 리뉴얼 사용성 테스트 — 작업 문서</h1>
-<p class="sub">모더레이티드 사용성 테스트 · 참가자 5명(P1–P5) · 과제 4개(T1–T4) · 프로토타입 v3 · 전체 수치는 동봉한 <strong>aggregation.xlsx</strong> 참고</p>
+<h1>체크아웃 리디자인 사용성 테스트 — 작업 문서</h1>
+<p class="sub">모더레이티드 원격 테스트 · 참가자 5명(P1–P5) · 1인당 약 30분 · 클릭형 프로토타입(v3) · 과제 4개(T1–T4)</p>
 
 <section class="summary">
-  <h2 style="border:none;margin:.1rem 0 .5rem;">이번 테스트에서 확인된 결론</h2>
+  <h2 style="border:none;margin:.1rem 0 .5rem;padding:0;">이번 테스트에서 확인된 결론</h2>
   <ul>
-    <li>장바구니 담기(T1)는 5명 전원 문제없음. 마찰은 <strong>결제 단계</strong>에 몰려 있음.</li>
-    <li><strong>할인 코드 입력란 위치</strong>가 가장 큰 문제. 5명 중 4명이 헤매거나 실패했고, P3은 코드를 못 넣은 채 결제까지 진행함(미적용 결제).</li>
-    <li><strong>결제 중 배송지 변경</strong> 경로가 막혀 있음. P1은 방법을 못 찾고 포기(<q>I'd just call support</q>).</li>
-    <li>결제 버튼이 <strong>눌러도 되는 상태처럼 보이지 않아</strong> P4가 "고장난 줄" 알고 과제 실패.</li>
-    <li><span class="decide">결정 필요</span> 할인 코드 입력란을 장바구니 화면으로 옮길지 먼저 정해야 함(가장 빠른 개선).</li>
+    <li>마찰은 결제 단계에 몰려 있음 — 장바구니 담기(T1)는 5명 전원 문제없이 성공.</li>
+    <li><strong>할인 코드 입력란 위치가 가장 큰 문제.</strong> <span class="detail">5명 중 4명이 헤매거나 실패했고, P3은 코드를 못 찾아 미적용 상태로 결제(본인은 인지 못 함). 모더레이터도 반복 발생으로 지목.</span></li>
+    <li><strong>결제 중 배송지 변경(T4)은 진입 경로가 불명확.</strong> <span class="detail">P1은 끝내 못 찾고 포기(SEQ 2/7), P2는 장바구니로 되돌아가 우회, P5는 편집 링크가 작아 머뭇거림.</span></li>
+    <li>저장 카드 결제(T3)에서 P4가 비활성처럼 보이는 결제 버튼 때문에 "고장 났다"고 판단하고 실패 — 1명 사례지만 결제 완료를 막는 차단성 이슈.</li>
+    <li><strong>결정 필요:</strong> 할인 코드 입력란을 장바구니 화면으로 노출할지부터 정해야 함(가장 빠르고 영향 큰 개선).</li>
   </ul>
 </section>
 
-<h2>우선 개선 이슈</h2>
-<ul class="issuelist">
-  <li><span class="rank r1">1</span><div><strong>할인 코드 입력란을 결제 화면에서 찾기 어려움</strong><br><span class="note">5명 중 4명 우회/실패 · P3 미적용 결제 · 근거 수준: 강</span></div></li>
-  <li><span class="rank r2">2</span><div><strong>결제 화면에서 배송지 변경 버튼을 찾기 어려움</strong><br><span class="note">P1 실패(SEQ 2/7), P2 우회, P5 작은 링크 · 근거 수준: 중</span></div></li>
-  <li><span class="rank r3">3</span><div><strong>결제 버튼이 눌러도 되는 버튼처럼 보이지 않음</strong><br><span class="note">P4 과제 실패(필수 입력칸 빈 줄 모름) · 근거 수준: 약(1명, 차단성 큼)</span></div></li>
-  <li><span class="rank r4">4</span><div><strong>CVV 입력 안내가 부족함</strong><br><span class="note">P2 잠깐 머뭇거림 · 근거 수준: 약(막히진 않음)</span></div></li>
-</ul>
-
 <h2>개선안 백로그</h2>
 <table>
-  <thead><tr><th>우선순위</th><th>이슈</th><th>근거</th><th>제안 개선안</th><th>기대 효과(가설)</th><th>확인 방법</th></tr></thead>
+  <thead><tr><th>순위</th><th>이슈</th><th>근거(요약)</th><th>제안 개선안</th><th>기대 효과(가설)</th><th>확인 방법</th></tr></thead>
   <tbody>
-    <tr><td>1</td><td>할인 코드 입력란을 결제 화면에서 찾기 어려움</td><td>P1·P4 우회, P3 실패(미적용 결제), P2·P5 불편 언급</td><td>장바구니 화면에 프로모 코드 입력란을 노출</td><td>코드 미적용 결제·이탈 감소</td><td>수정안에서 T2 재수행, 직접 적용률 비교</td></tr>
-    <tr><td>2</td><td>결제 화면에서 배송지 변경 버튼을 찾기 어려움</td><td>P1 실패(SEQ 2/7), P2 장바구니로 우회, P5 링크가 작음</td><td>배송지 카드에 "변경" 버튼(CTA형)을 우측 상단 고정</td><td>배송지 오류로 인한 결제 중단 감소</td><td>수정안에서 T4 재수행, 성공률·머뭇거림 비교</td></tr>
-    <tr><td>3</td><td>결제 버튼이 비활성처럼 보임</td><td>P4 실패 — "Nothing's happening when I click"</td><td>활성/비활성 상태를 또렷이 구분, 빈 필수칸 인라인 안내</td><td>"고장난 줄 알고" 이탈하는 사례 감소</td><td>수정안에서 T3 재수행, 결제 버튼 인지율 확인</td></tr>
-    <tr><td>4</td><td>CVV 입력 안내 부족</td><td>P2 — "Is this the 3 digits on the back?"</td><td>CVV 칸에 위치 안내 툴팁/도움말 추가</td><td>입력 머뭇거림 감소</td><td>수정안에서 CVV 입력 시간 비교</td></tr>
+    <tr>
+      <td>1</td>
+      <td>할인 코드 입력란을 결제 화면에서 찾기 어려움</td>
+      <td>5명 중 4명 우회/실패 (P1·P3·P4 헤맴, P3 미적용 결제 / P2·P5 언급)</td>
+      <td>장바구니 화면에 프로모 코드 입력란 노출, 결제 화면에도 위치 또렷이</td>
+      <td>코드 미적용 결제·문의 감소, 프로모션 효과 개선</td>
+      <td>수정안에서 T2 재수행, 직접 적용한 비율 비교</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>결제 진입 후 배송지를 바꾸는 경로가 안 보임</td>
+      <td>P1 실패·포기(SEQ 2/7) · P2 장바구니로 우회 · P5 편집 링크 작아 머뭇거림</td>
+      <td>결제 화면에 배송지 "변경/편집" 진입점을 눈에 띄게 추가</td>
+      <td>결제 중 이탈·지원 문의 감소</td>
+      <td>수정안에서 T4 재수행, 직접 변경 성공률·머뭇거림 비교</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>결제 버튼이 비활성처럼 보여 "고장"으로 오해</td>
+      <td>P4 실패 — 회색 처리된 버튼을 눌러도 반응 없어 폼이 깨진 줄 앎(필수 항목 미입력 인지 못 함)</td>
+      <td>버튼 활성/비활성 상태를 명확히 구분, 미입력 필수 항목 안내 노출</td>
+      <td>막판 결제 실패·이탈 감소</td>
+      <td>수정안에서 T3 재수행, 버튼 상태 오해 여부 확인</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>CVV 입력 위치를 헷갈려 함</td>
+      <td>P2 1명 — "뒷면 3자리 맞나?" 머뭇거림(성공)</td>
+      <td>CVV 입력란에 위치 안내(카드 뒷면 3자리) 보조 텍스트 추가</td>
+      <td>입력 머뭇거림 감소</td>
+      <td>1명 사례 — 다음 테스트에서 재현 여부 확인</td>
+    </tr>
   </tbody>
 </table>
-<p class="note">담당자·일정·매출 영향은 자료에 없어 비워둠. 트래커에 옮길 때 팀에서 채우세요.</p>
+<p class="note">담당자·일정·매출 영향 수치는 이번 자료에 없어 비워둠. 트래커로 옮길 때 팀에서 채우세요.</p>
 
 <h2>이슈별 상세 카드</h2>
 
-<div class="card lv1">
-  <h3>이슈 1. 할인 코드 입력란을 결제 화면에서 찾기 어려움 <span class="lvl s">근거 강</span></h3>
-  <div class="row"><span class="k">문제</span>사용자가 할인 코드를 장바구니에서 넣으려 하는데, 입력란이 결제(payment) 화면에 있어 잘 못 찾음.</div>
-  <div class="row"><span class="k">근거</span>P1: 장바구니에서 먼저 찾다가 결제 화면에서 발견(<q>where do I put the code... oh it's down here</q>) · P3: 끝까지 못 찾고 코드 없이 결제, 본인은 모름(SEQ 2 = 3/7) · P4: 스크롤 후 결제 화면에서 발견 · P2: <q>I almost missed it</q> · P5: <q>the promo code placement is weird</q></div>
-  <div class="row"><span class="k">영향</span>코드를 못 넣은 채 결제가 끝나면(P3 사례) 사용자 불만·문의로 이어지고, 프로모션 효과도 떨어질 수 있음(가설).</div>
-  <div class="row"><span class="k">제안</span>장바구니 화면에 프로모 코드 입력란을 노출. 결제 화면에도 유지하되 위치를 또렷하게.</div>
-  <div class="row"><span class="k">확인 방법</span>수정안에서 T2를 다시 수행하게 하고, 직접(헤매지 않고) 적용한 비율을 비교.</div>
+<div class="card l1">
+  <h3><span class="rank">1</span>할인 코드 입력란을 결제 화면에서 찾기 어려움<span class="lvl">근거 강</span></h3>
+  <div class="row"><span class="k">문제</span><span>다수가 코드를 장바구니에서 넣으려 했지만 입력란이 결제(payment) 화면에 있어 잘 못 찾음. 한 명은 끝까지 못 찾고 미적용 상태로 결제.</span></div>
+  <div class="row"><span class="k">근거</span>
+    <ul class="evidence">
+      <li><span class="pid">P3</span> T2 — 실패. 끝까지 못 찾고 코드 없이 결제, 본인은 미적용 사실 인지 못 함. SEQ 3/7. <span class="q">"I assumed there'd be a promo box right in the cart."</span></li>
+      <li><span class="pid">P1</span> T2 — 성공했으나 장바구니에서 먼저 찾다 결제 화면에서 뒤늦게 발견. <span class="q">"Wait, where do I put the code... oh it's down here."</span></li>
+      <li><span class="pid">P4</span> T2 — 성공했으나 결제 화면에서 스크롤한 뒤에야 입력란 발견.</li>
+      <li><span class="pid">P2</span> T2 — 직접 성공했지만 따로 언급. <span class="q">"The code thing tripped me up too, I almost missed it."</span></li>
+      <li><span class="pid">P5</span> T2 — 직접 성공했지만 전체 코멘트에서 지적. <span class="q">"the promo code placement is weird."</span></li>
+    </ul>
+  </div>
+  <div class="row"><span class="k">영향</span><span>코드 미적용 결제는 고객 불만·문의로 이어지고 프로모션 효과도 떨어질 수 있음(가설, 이번 테스트에서 매출 영향은 측정 안 됨).</span></div>
+  <div class="row"><span class="k">제안</span><span>장바구니 화면에 프로모 코드 입력란을 노출. 결제 화면에도 유지하되 위치를 또렷하게.</span></div>
+  <div class="row"><span class="k">확인 방법</span><span>수정안에서 T2 재수행 — 헤매지 않고 직접 적용한 비율, 미적용 결제 발생 여부 비교.</span></div>
 </div>
 
-<div class="card lv2">
-  <h3>이슈 2. 결제 화면에서 배송지 변경 버튼을 찾기 어려움 <span class="lvl m">근거 중</span></h3>
-  <div class="row"><span class="k">문제</span>결제 단계에 들어간 뒤 배송지를 바꾸려는데 변경 경로가 안 보여서, 포기하거나 장바구니로 되돌아가는 우회를 함.</div>
-  <div class="row"><span class="k">근거</span>P1: 방법 못 찾고 포기(<q>I'd just call support at this point honestly</q>, SEQ 2/7) · P2: 장바구니로 돌아갔다 다시 결제 진입 · P5: <q>took me a sec to see the edit link, it's pretty small</q> · 모더레이터 메모: 결제 진입 후 명확한 진입점 없음</div>
-  <div class="row"><span class="k">영향</span>배송지 오류를 뒤늦게 발견한 사용자가 결제를 멈추거나 고객센터로 빠질 수 있음(가설).</div>
-  <div class="row"><span class="k">제안</span>결제 화면 배송지 영역에 "변경" 버튼을 링크가 아닌 버튼형 CTA로, 배송지 카드 우측 상단에 고정 배치.</div>
-  <div class="row"><span class="k">확인 방법</span>수정안에서 T4 재수행, 배송지 변경 성공률과 머뭇거림 여부 비교.</div>
+<div class="card l2">
+  <h3><span class="rank">2</span>결제 진입 후 배송지를 바꾸는 경로가 안 보임<span class="lvl">근거 중</span></h3>
+  <div class="row"><span class="k">문제</span><span>결제 단계에 들어선 뒤 배송지를 변경할 진입점이 뚜렷하지 않음. 한 명은 끝내 못 찾고 포기, 다른 사람은 장바구니로 되돌아가 우회.</span></div>
+  <div class="row"><span class="k">근거</span>
+    <ul class="evidence">
+      <li><span class="pid">P1</span> T4 — 실패. 결제 도달 후 배송지 변경 방법을 못 찾고 포기. SEQ 2/7. <span class="q">"I'd just call support at this point honestly."</span></li>
+      <li><span class="pid">P2</span> T4 — 성공했으나 장바구니로 되돌아가 플로우를 다시 타는 우회, 시간 소요.</li>
+      <li><span class="pid">P5</span> T4 — 성공했으나 머뭇거림. <span class="q">"took me a sec to see the edit link, it's pretty small."</span></li>
+    </ul>
+  </div>
+  <div class="row"><span class="k">영향</span><span>변경 경로를 못 찾으면 결제 중 이탈이나 지원 문의로 이어질 수 있음(가설). P1은 실제로 "지원에 전화하겠다"며 포기.</span></div>
+  <div class="row"><span class="k">제안</span><span>결제 화면 내 배송지 영역에 "변경/편집" 진입점을 눈에 띄게(링크 크기·위치 강화) 배치.</span></div>
+  <div class="row"><span class="k">확인 방법</span><span>수정안에서 T4 재수행 — 직접 변경 성공률, 우회·머뭇거림 빈도 비교.</span></div>
 </div>
 
-<div class="card lv3">
-  <h3>이슈 3. 결제 버튼이 눌러도 되는 버튼처럼 보이지 않음 <span class="lvl w">근거 약 · 1명</span></h3>
-  <div class="row"><span class="k">문제</span>결제 버튼이 회색(비활성)처럼 보여, 필수 입력칸이 비어 있다는 걸 모른 채 "버튼이 고장났다"고 인식.</div>
-  <div class="row"><span class="k">근거</span>P4: 과제 실패 — <q>Nothing's happening when I click</q> (필수 필드가 빈 줄 몰랐음)</div>
-  <div class="row"><span class="k">영향</span>차단성이 큰 문제(결제 자체가 막힘). 다만 1명 사례라 재현 확인 필요.</div>
-  <div class="row"><span class="k">제안</span>활성/비활성 버튼 상태를 또렷이 구분하고, 빈 필수칸을 인라인으로 안내(무엇을 채워야 하는지 표시).</div>
-  <div class="row"><span class="k">확인 방법</span>수정안에서 T3 재수행, 같은 혼동이 또 나오는지 확인.</div>
+<div class="card l3">
+  <h3><span class="rank">3</span>결제 버튼이 비활성처럼 보여 "고장"으로 오해<span class="lvl">근거 약(1명)</span></h3>
+  <div class="row"><span class="k">문제</span><span>저장 카드로 결제(T3)할 때 결제 버튼이 회색 처리되어 비활성처럼 보임. 눌러도 반응이 없자 폼이 깨진 것으로 오해하고 실패 — 실제로는 필수 항목이 비어 있었음.</span></div>
+  <div class="row"><span class="k">근거</span>
+    <ul class="evidence">
+      <li><span class="pid">P4</span> T3 — 실패. 버튼이 비활성처럼 보여 폼이 고장 난 줄 앎, 필수 항목 미입력은 인지 못 함. <span class="q">"Nothing's happening when I click."</span></li>
+    </ul>
+  </div>
+  <div class="row"><span class="k">영향</span><span>1명 사례지만 결제 완료 자체를 막는 차단성 문제. 모더레이터도 시각적 표현(어포던스) 이슈로 지목.</span></div>
+  <div class="row"><span class="k">제안</span><span>버튼의 활성/비활성 상태를 명확히 구분하고, 비활성일 때 어떤 필수 항목이 비었는지 안내를 노출.</span></div>
+  <div class="row"><span class="k">확인 방법</span><span>수정안에서 T3 재수행 — 버튼 상태를 오해하는지, 미입력 안내가 이해되는지 확인.</span></div>
 </div>
 
-<div class="card lv4">
-  <h3>이슈 4. CVV 입력 안내가 부족함 <span class="lvl w">근거 약 · 비차단</span></h3>
-  <div class="row"><span class="k">문제</span>CVV가 어디 적힌 숫자인지 몰라 잠깐 멈춤(과제는 성공).</div>
-  <div class="row"><span class="k">근거</span>P2: <q>Is this the 3 digits on the back?</q></div>
-  <div class="row"><span class="k">영향</span>막히는 수준은 아니지만 작은 헷갈림이 쌓이면 입력 속도에 영향(가설).</div>
-  <div class="row"><span class="k">제안</span>CVV 칸 옆에 위치 안내(카드 뒷면 3자리) 툴팁/도움말 추가.</div>
-  <div class="row"><span class="k">확인 방법</span>수정안에서 CVV 입력까지 걸리는 시간/머뭇거림 비교.</div>
+<div class="card l4">
+  <h3><span class="rank">4</span>CVV 입력 위치를 헷갈려 함<span class="lvl">근거 약(1명)</span></h3>
+  <div class="row"><span class="k">문제</span><span>저장 카드 결제 중 CVV 입력에서 어떤 숫자를 넣어야 하는지 잠시 헷갈림(성공으로는 이어짐).</span></div>
+  <div class="row"><span class="k">근거</span>
+    <ul class="evidence">
+      <li><span class="pid">P2</span> T3 — 성공했으나 CVV 필드에서 머뭇거림. <span class="q">"Is this the 3 digits on the back?"</span></li>
+    </ul>
+  </div>
+  <div class="row"><span class="k">영향</span><span>작은 헷갈림 수준이며 1명만 관찰됨 — 우선순위 낮음.</span></div>
+  <div class="row"><span class="k">제안</span><span>CVV 입력란에 "카드 뒷면 3자리" 같은 보조 안내 텍스트 추가.</span></div>
+  <div class="row"><span class="k">확인 방법</span><span>1명 사례 — 다음 테스트에서 재현되는지 확인 후 우선순위 재판단.</span></div>
 </div>
 
 <h2>과제별 결과 요약</h2>
 <table>
   <thead><tr><th>과제</th><th>설명</th><th>성공</th><th>실패</th><th>주요 양상</th></tr></thead>
   <tbody>
-    <tr><td>T1</td><td>장바구니에 상품 담기</td><td class="ok">5</td><td>0</td><td>전원 빠르게 성공</td></tr>
-    <tr><td>T2</td><td>할인 코드 적용</td><td class="ok">4</td><td class="bad">1</td><td>성공자도 다수 우회(코드 위치 혼란) · P3 미적용 결제</td></tr>
-    <tr><td>T3</td><td>저장된 카드로 결제</td><td class="ok">4</td><td class="bad">1</td><td>P4 실패(버튼이 비활성처럼 보임) · P2 CVV 머뭇거림</td></tr>
-    <tr><td>T4</td><td>결제 중 배송지 변경</td><td class="ok">4</td><td class="bad">1</td><td>P1 실패(포기) · 성공자도 우회/머뭇거림 다수</td></tr>
-    <tr><td><strong>합계</strong></td><td>4과제 × 5명</td><td class="ok"><strong>17</strong></td><td class="bad"><strong>3</strong></td><td>총 20개 시도 (참가자 5명 기준 방향성 수치)</td></tr>
+    <tr><td>T1</td><td>장바구니에 상품 담기</td><td class="ok">5</td><td>0</td><td>전원 직접 성공, 마찰 없음</td></tr>
+    <tr><td>T2</td><td>할인 코드 적용</td><td class="ok">4</td><td class="bad">1</td><td>성공자 다수도 우회(P1·P4 스크롤/뒤늦게 발견) · P3 미적용 결제(실패) · P2·P5 코멘트로 지적</td></tr>
+    <tr><td>T3</td><td>저장 카드로 결제 완료</td><td class="ok">4</td><td class="bad">1</td><td>P4 비활성 버튼 오해로 실패 · P2 CVV 머뭇거림</td></tr>
+    <tr><td>T4</td><td>결제 중 배송지 변경</td><td class="ok">4</td><td class="bad">1</td><td>P1 못 찾고 포기(실패) · P2 우회 · P5 편집 링크 작아 머뭇거림</td></tr>
   </tbody>
 </table>
+<p class="note">성공/실패는 디자인의 효과를 보는 지표이지 참가자 능력 평가가 아님. "우회/머뭇거림"은 성공으로 집계되었어도 개선 신호로 봄.</p>
 
-<details>
-  <summary>근거 부록 — 참가자별 원자료 · 인용 · 측정값 (펼쳐 보기)</summary>
-  <p class="note">참가자는 익명 라벨(P1–P5). 인용문은 원문(영어) 그대로 유지. 더 상세한 수치는 aggregation.xlsx 참고.</p>
-  <table>
-    <thead><tr><th>참가자</th><th>T1</th><th>T2 할인코드</th><th>T3 결제</th><th>T4 배송지 변경</th><th>비고/인용</th></tr></thead>
-    <tbody>
-      <tr><td>P1</td><td class="ok">성공(직접)</td><td class="warn">성공(우회)</td><td class="ok">성공</td><td class="bad">실패(포기)</td><td>SEQ(T4)=2/7 · <q>I'd just call support at this point honestly</q></td></tr>
-      <tr><td>P2</td><td class="ok">성공</td><td class="ok">성공(직접)</td><td class="warn">성공(CVV 머뭇)</td><td class="warn">성공(우회)</td><td><q>The code thing tripped me up too, I almost missed it</q></td></tr>
-      <tr><td>P3</td><td class="ok">성공</td><td class="bad">실패(미적용)</td><td class="ok">성공</td><td class="ok">성공(직접)</td><td>SEQ(T2)=3/7 · <q>I assumed there'd be a promo box right in the cart</q></td></tr>
-      <tr><td>P4</td><td class="ok">성공</td><td class="warn">성공(우회)</td><td class="bad">실패(버튼 비활성처럼)</td><td class="ok">성공</td><td><q>Nothing's happening when I click</q></td></tr>
-      <tr><td>P5</td><td class="ok">성공</td><td class="ok">성공(직접)</td><td class="ok">성공</td><td class="warn">성공(머뭇)</td><td><q>took me a sec to see the edit link, it's pretty small</q> · <q>just the promo code placement is weird</q></td></tr>
-    </tbody>
-  </table>
-  <p class="note" style="margin-top:.8rem;"><strong>방법론 메모:</strong> 모더레이티드 사용성 테스트, 참가자 5명. 표본이 작아 비율은 통계가 아닌 <em>참고용 수치</em>로 읽어야 함. 성공/실패는 디자인의 효과를 측정한 것이지 사용자 능력을 평가한 것이 아님.</p>
+<details class="appendix">
+  <summary>근거 부록 — 참가자별 원자료 · 인용 · 측정값</summary>
+  <div class="inner">
+    <p class="note">아래는 메모에 직접 적힌 내용만 옮긴 것입니다(원문 인용은 그대로 유지). 해석·제안은 위 본문 카드에 있습니다.</p>
+    <table>
+      <thead><tr><th>참가자</th><th>T1 담기</th><th>T2 할인코드</th><th>T3 저장카드 결제</th><th>T4 배송지 변경</th><th>측정값/코멘트</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>P1</td>
+          <td class="ok">성공(직접, 빠름)</td>
+          <td class="warn">성공(우회) — 장바구니에서 먼저 찾다 결제 화면에서 발견. "Wait, where do I put the code... oh it's down here."</td>
+          <td class="ok">성공</td>
+          <td class="bad">실패 — 결제 후 배송지 변경 못 찾고 포기. "I'd just call support at this point honestly."</td>
+          <td>SEQ(T4) 2/7</td>
+        </tr>
+        <tr>
+          <td>P2</td>
+          <td class="ok">성공</td>
+          <td class="ok">성공(직접)</td>
+          <td class="warn">성공 — CVV 필드 머뭇거림. "Is this the 3 digits on the back?"</td>
+          <td class="warn">성공(우회) — 장바구니로 돌아가 플로우 재진입, 시간 소요</td>
+          <td>"The code thing tripped me up too, I almost missed it."</td>
+        </tr>
+        <tr>
+          <td>P3</td>
+          <td class="ok">성공</td>
+          <td class="bad">실패 — 할인란 못 찾고 미적용 결제, 본인은 인지 못 함. "I assumed there'd be a promo box right in the cart."</td>
+          <td class="ok">성공</td>
+          <td class="ok">성공(직접)</td>
+          <td>SEQ(T2) 3/7</td>
+        </tr>
+        <tr>
+          <td>P4</td>
+          <td class="ok">성공</td>
+          <td class="warn">성공(우회) — 결제 화면 스크롤 후 발견</td>
+          <td class="bad">실패 — 버튼이 비활성처럼 보여 고장으로 오해(필수 항목 미입력 인지 못 함). "Nothing's happening when I click."</td>
+          <td class="ok">성공</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td>P5</td>
+          <td class="ok">성공</td>
+          <td class="ok">성공(직접)</td>
+          <td class="ok">성공</td>
+          <td class="warn">성공 — 편집 링크 작아 머뭇거림. "took me a sec to see the edit link, it's pretty small."</td>
+          <td>전체 코멘트: "Mostly smooth, just the promo code placement is weird."</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 style="font-size:1rem;margin:1.4rem 0 .5rem;">모더레이터 메모(원문 요지)</h3>
+    <ul>
+      <li>할인 코드 위치(T2)가 반복적으로 언급됨.</li>
+      <li>T4(배송지 변경)는 결제 진입 후 명확한 진입점이 없음.</li>
+      <li>P4의 비활성처럼 보이는 결제 버튼은 시각적 표현(어포던스) 이슈일 수 있음.</li>
+    </ul>
+
+    <h3 style="font-size:1rem;margin:1.4rem 0 .5rem;">수집된 측정값</h3>
+    <ul>
+      <li>SEQ는 T4-P1(2/7), T2-P3(3/7) 두 건만 기록됨. 그 외 과제·참가자의 SEQ는 미수집.</li>
+      <li>완료율은 위 과제별 표의 성공/실패 집계가 전부이며(과제별 4/5 또는 5/5), 과제 소요 시간·미스클릭 수는 수치로 기록되지 않음.</li>
+    </ul>
+
+    <h3 style="font-size:1rem;margin:1.4rem 0 .5rem;">이 보고서 보는 법</h3>
+    <p class="legend">본문은 바로 실행에 옮기기 위한 문서이고, 이 부록은 근거를 되짚기 위한 영역입니다.
+    각 이슈의 "근거 수준(강·중·약)"은 몇 명에게서, 얼마나 차단적으로 관찰됐는지를 뜻합니다 —
+    여러 명에게 반복되면 강, 1명 사례면 약으로 표기했습니다. "성공(우회)/머뭇거림"은 과제는 마쳤지만
+    개선 신호가 있는 경우입니다. 인용문은 메모 원문 그대로 유지했습니다.</p>
+  </div>
 </details>
 
 <h2>추가 확인 필요사항</h2>
 <ul>
-  <li>완료율·과제 소요 시간 등은 이번 메모에 <strong>수집되지 않음</strong> — 다음 테스트에서 계측 권장.</li>
-  <li>이슈 3(결제 버튼)·CVV는 각각 1명 사례 — 추가 참가자로 재현 여부 확인 필요.</li>
-  <li>SEQ는 2건(P1-T4, P3-T2)만 기록됨 — 전 과제 SEQ 수집 시 비교가 쉬워짐.</li>
-  <li>매출·전환 영향은 자료에 없음 — 개선 후 결제 전환 지표와 연결해 검증 권장.</li>
+  <li>완료율 외 핵심 지표(과제 소요 시간, 미스클릭 수)가 이번 메모에 수집되지 않음 — 다음 테스트에서 계측 권장.</li>
+  <li>SEQ가 5명 전원·전 과제가 아니라 2건(T4-P1, T2-P3)만 기록됨 — 과제별 체감 난이도 비교가 어려움, 일관되게 수집 권장.</li>
+  <li>참가자 5명은 패턴의 방향성만 보여줌 — T2처럼 4명에게 반복된 신호는 신뢰할 만하나, P4 버튼 오해·P2 CVV처럼 1명 사례는 추가 확인 후 우선순위 확정 필요.</li>
+  <li>매출·전환·이탈에 대한 실제 영향은 측정되지 않음 — 본문의 "기대 효과"는 모두 가설이며, 수정안 재테스트 또는 실데이터로 검증 필요.</li>
 </ul>
 
 </body>
