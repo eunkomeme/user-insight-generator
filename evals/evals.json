@@ -59,6 +59,21 @@
         {"text": "HTML report follows the readability patterns: per-source evidence list (one participant per line), label↔value grid rows, no italics, backlog table + detail cards without a separate standalone ranked list", "type": "qualitative"},
         {"text": "Quotes are verbatim from the source and attributed to anonymized labels (P1-P5); no fabricated quotes, metrics, or benchmarks", "type": "qualitative"}
       ]
+    },
+    {
+      "id": 4,
+      "name": "slide-deck-presentation-format",
+      "prompt": "체크아웃 사용성 테스트 결과를 임원진 보고용 슬라이드 덱으로 만들어줄 수 있어요? notes는 usability_test_notes.md예요. 회의에서 한 장씩 넘기면서 보여줄 거예요.",
+      "files": ["sample-inputs/usability_test_notes.md"],
+      "expected_output": "A self-contained slide-deck HTML (not the default scrolling working-document layout) — one idea per slide, large type, cover slide + decision-summary slide(s) + a handful of top-issue slides (curated to 2-3 pieces of evidence each, not the full per-participant list) + an end slide pointing back to the fuller evidence. Same grounding discipline as the working document: verbatim quotes, no fabricated metrics or counts, and no new findings beyond what's in usability_test_notes.md.",
+      "assertions": [
+        {"text": "Produces a self-contained .html structured as discrete full-viewport slides (not the default scrolling working-document spine), inline CSS, no external CDN/image/JS dependencies", "type": "qualitative"},
+        {"text": "Each slide carries one idea with noticeably larger type than the working-document format, rather than packing multiple sections onto one slide", "type": "qualitative"},
+        {"text": "Curates evidence per issue slide down to a few strongest items rather than reproducing the full per-participant evidence list", "type": "qualitative"},
+        {"text": "Limits issue slides to the top few issues by priority rather than one slide per every issue found", "type": "qualitative"},
+        {"text": "Points back to a fuller document/spreadsheet for complete evidence rather than duplicating it on the slides", "type": "qualitative"},
+        {"text": "Keeps quotes verbatim and attributed to anonymized participants; invents no metrics, counts, or findings beyond the source notes", "type": "qualitative"}
+      ]
     }
   ],
   "non_trigger_prompts": [

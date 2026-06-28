@@ -95,6 +95,16 @@ Think of it as "complete record (spreadsheet) + action document (HTML)". For pur
 thin, or non-numeric input, the HTML report (or even a short written summary) alone is the right
 output.
 
+**Optional third shape: a slide deck, only when explicitly asked.** If the user's phrasing asks for
+a presentation rather than a document — "슬라이드로 만들어줘", "발표용 덱으로", "임원/스테이크홀더 보고용
+프레젠테이션처럼", "make this a slide deck" — build a self-contained slide-deck `.html` instead of (or
+alongside) the working-document HTML. It shares the same evidence and the same hard constraints
+(self-contained, offline, no external deps), but is curated further (top 3–5 issues only, 2–3 pieces
+of evidence per issue, large type, one idea per slide) and points back to the working
+document/spreadsheet for full evidence rather than duplicating it. Don't switch to this format on
+your own initiative — default to the working document unless a presentation context is clearly
+requested. See `references/slide-deck-patterns.md`.
+
 ## Workflow
 
 This is a sequence of intentions, not a rigid checklist. Adapt depth to the material — thin input
@@ -261,6 +271,9 @@ Read these as needed; they hold the depth so this file stays scannable.
   cues and pitfalls.
 - `references/html-report-patterns.md` — module catalog, selection heuristic, self-contained HTML
   patterns, visual grounding cues.
+- `references/slide-deck-patterns.md` — optional presentation format: when to switch to it, the
+  layout module catalog (cover/section/two-col/statement/end, adapted from Slidev's vocabulary),
+  no-JS-required navigation, and the self-contained slide skeleton.
 - `references/maze-methodology-notes.md` — methodology notes distilled from Maze's articles on
   stakeholder buy-in, affinity diagrams, usability metrics, and qualitative research. Guidance to
   draw on, not structures to copy.
